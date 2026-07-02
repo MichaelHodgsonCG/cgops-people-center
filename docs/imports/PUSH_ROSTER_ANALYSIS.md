@@ -1,6 +1,6 @@
 # Push Management Roster — Import Analysis (Phase 1 input)
 
-> **Status:** Rev. 1 — analysis of `Mgmt_Roster__push_report_May_11_2026.xlsx`
+> **Status:** Rev. 2 — analysis of `Mgmt_Roster__push_report_May_11_2026.xlsx`
 > (Push export, reviewed 2026-07-01) ahead of Phase 1 schema and import
 > decisions. **The source file is never committed to this repository** — it
 > contains compensation data and the full staff roster; it lives with the
@@ -9,6 +9,41 @@
 > manager/emerging-leader population; People Center does not mirror Push; no
 > salary/compensation data is imported; company/location fields are
 > business-unit mapping, not personal geography.
+
+## Rev. 2 amendment — eligibility model (supersedes the §2 tier rule)
+
+Approved refinement: **the population is defined by position-level People
+Center eligibility, not salary status** (ADR 0004). The salaried/biweekly
+selection rule in §2 is retired as an architectural rule — it survives only
+as the historical observation that the salaried set was a good first
+approximation of the leadership population.
+
+Under the eligibility model, the pipeline asks *"should this person exist in
+People Center?"*, answered by `positions.people_center_eligible` via
+`position_mappings`. Changes versus §2:
+
+- **Chef de Partie is eligible** (hourly leadership-pipeline position,
+  imported as `emerging_leader` via `positions.default_person_kind`) —
+  adding ~40 people; the eligible population is ~156, not 115.
+- **Every Sous Chef qualifies by position** — including the one hourly
+  sous chef the salary rule would have missed.
+- **General Manager in Training is a real position** in the vocabulary
+  (supersedes the P1-3 map-to-AGM recommendation).
+- **Supervisor is mapped but not eligible** — a clean, recorded
+  out-of-scope skip; supervisors enter only as HQ-approved emerging leaders
+  (resolves the nomination half of D4).
+- Salary period is no longer read at all — the normalization whitelist
+  (ADR 0005) never touches either compensation column.
+- The import is implemented as a **source synchronization pipeline**
+  (transport → normalize → map → eligibility → review → upsert; ADR 0005):
+  the xlsx file is today's transport, a Push API response is tomorrow's,
+  and stages 2–6 are transport-agnostic.
+
+Decision-table status: P1-1 superseded by the eligibility set, P1-2
+resolved (nomination-only), P1-3 superseded (GMiT is a position), P1-4
+unchanged (add the four service-manager positions **and now Chef de
+Partie / General Manager in Training** to CGOPS vocabulary), P1-5 and
+P1-6 unchanged and still recommended.
 
 ## 1. What the file actually is
 

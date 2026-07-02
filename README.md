@@ -76,8 +76,8 @@ Every later role grant is done by an admin.
 
 | Phase | Scope | Status |
 |---|---|---|
-| 0 | Skeleton: auth, RLS helpers, permissions module, `audit_log` + `events`, branded shell | **This repo state** |
-| 1 | Directory, org reference (`external_ref` to CGOPS), people, assignments | — |
+| 0 | Skeleton: auth, RLS helpers, permissions module, `audit_log` + `events`, branded shell | Done |
+| 1 | Directory, org reference (`external_ref` to CGOPS), people, assignments, source sync pipeline (ADR 0004/0005) | **This repo state** |
 | 2 | Four-category notes with RLS-enforced visibility; Manager Cheat Sheet v1 | — |
 | 3 | Development plans, readiness-by-position, training status | — |
 | 4 | Succession, leadership timeline, bench/risk dashboard | — |
