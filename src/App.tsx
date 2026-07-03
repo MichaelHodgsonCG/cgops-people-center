@@ -51,7 +51,7 @@ export default function App() {
           <DataSourcesView profile={profile} />
         </Suspense>
       ) : (
-        <DirectoryView isAdmin={user?.role === 'admin'} />
+        <DirectoryView session={session} profile={profile} isAdmin={user?.role === 'admin'} />
       )}
     </AppShell>
   )

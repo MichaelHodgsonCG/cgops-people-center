@@ -18,7 +18,15 @@ import type { AppRole, UserProfile } from '../types'
 
 export type Action = 'view' | 'create' | 'update' | 'delete' | 'administer'
 
-export type Resource = 'shell' | 'admin_area' | 'directory' | 'data_sources'
+export type Resource =
+  | 'shell'
+  | 'admin_area'
+  | 'directory'
+  | 'data_sources'
+  | 'person' // profile editing, assignments, review-flag clearing
+  | 'notes' // leadership/development/relationship capture
+  | 'relationship_notes' // the cheat sheet's relationship half (audited read)
+  | 'restricted_notes' // restricted-visibility notes (audited read)
 
 export interface PermissionUser {
   role: AppRole
@@ -36,8 +44,27 @@ export function can(
 ): boolean {
   if (!user) return false
   if (user.role === 'admin') return true
-  // Phase 1: any authenticated leader may view the shell and the directory;
-  // Data Sources (lineage contains legal names) and all writes are
-  // admin-only until Phase 2 makes the other roles real.
-  return action === 'view' && (resource === 'shell' || resource === 'directory')
+
+  // Phase 2 truth table — MUST mirror the RLS/definer rules in migration
+  // 20260703120000 (the database is the enforcement layer; this module only
+  // keeps the UI honest about it):
+  //   * any role: shell + directory
+  //   * executive / regional_leader / location_leader: write notes
+  //   * executive (hq): relationship + restricted audited reads
+  //   * person editing, Data Sources: admin only
+  switch (resource) {
+    case 'shell':
+    case 'directory':
+      return action === 'view'
+    case 'notes':
+      return (
+        action === 'create' &&
+        ['executive', 'regional_leader', 'location_leader'].includes(user.role)
+      )
+    case 'relationship_notes':
+    case 'restricted_notes':
+      return action === 'view' && user.role === 'executive'
+    default:
+      return false
+  }
 }

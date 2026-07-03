@@ -55,3 +55,25 @@ export interface AppEvent {
   context: Record<string, unknown>
   created_at: string
 }
+
+// --- Phase 2: notes -------------------------------------------------------
+
+export const NOTE_CATEGORIES = ['leadership', 'development', 'relationship'] as const
+export type NoteCategory = (typeof NOTE_CATEGORIES)[number]
+
+export const NOTE_VISIBILITIES = ['leadership', 'hq', 'restricted'] as const
+export type NoteVisibility = (typeof NOTE_VISIBILITIES)[number]
+
+export interface Note {
+  id: string
+  person_id: string
+  author_person_id: string | null
+  author_auth_uid: string
+  author_name: string
+  category: NoteCategory
+  visibility: NoteVisibility
+  body: string
+  noted_on: string
+  voluntarily_shared: boolean
+  created_at: string
+}

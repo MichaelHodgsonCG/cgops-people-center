@@ -1,6 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { Session } from '@supabase/supabase-js'
 import { AlertTriangle, Search, Users } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
+import { PersonPanel } from '../people/PersonPanel'
+import type { UserProfile } from '../../types'
 
 interface DirectoryPerson {
   id: string
@@ -32,16 +35,22 @@ function currentPrimary(person: DirectoryPerson) {
   )
 }
 
-export function DirectoryView({ isAdmin }: { isAdmin?: boolean }) {
+interface DirectoryViewProps {
+  session: Session
+  profile: UserProfile | null
+  isAdmin?: boolean
+}
+
+export function DirectoryView({ session, profile, isAdmin }: DirectoryViewProps) {
   const [people, setPeople] = useState<DirectoryPerson[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [locationFilter, setLocationFilter] = useState('')
   const [kindFilter, setKindFilter] = useState('')
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
-  useEffect(() => {
-    let cancelled = false
+  const load = useCallback(() => {
     supabase
       .from('people_center_people')
       .select(
@@ -54,15 +63,15 @@ export function DirectoryView({ isAdmin }: { isAdmin?: boolean }) {
       .neq('status', 'departed')
       .order('full_name')
       .then(({ data, error: err }) => {
-        if (cancelled) return
         if (err) setError(err.message)
         else setPeople((data as unknown as DirectoryPerson[]) ?? [])
         setLoading(false)
       })
-    return () => {
-      cancelled = true
-    }
   }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
 
   const locations = useMemo(() => {
     const names = new Set<string>()
@@ -176,7 +185,11 @@ export function DirectoryView({ isAdmin }: { isAdmin?: boolean }) {
               {filtered.map((p) => {
                 const primary = currentPrimary(p)
                 return (
-                  <tr key={p.id} className="border-b border-surface-line/60 last:border-0">
+                  <tr
+                    key={p.id}
+                    onClick={() => setSelectedId(p.id)}
+                    className="cursor-pointer border-b border-surface-line/60 last:border-0 hover:bg-surface-muted/60"
+                  >
                     <td className="px-4 py-2.5 font-medium">
                       <span className="flex items-center gap-2">
                         {p.full_name}
@@ -204,6 +217,16 @@ export function DirectoryView({ isAdmin }: { isAdmin?: boolean }) {
             </tbody>
           </table>
         </div>
+      )}
+
+      {selectedId && (
+        <PersonPanel
+          personId={selectedId}
+          session={session}
+          profile={profile}
+          onClose={() => setSelectedId(null)}
+          onChanged={load}
+        />
       )}
     </div>
   )
