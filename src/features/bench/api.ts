@@ -117,7 +117,7 @@ export interface LocationCoverage {
   locationId: string
   locationName: string
   hasGm: boolean
-  hasHeadChef: boolean
+  hasChefDeCuisine: boolean
   leaders: number
 }
 
@@ -139,7 +139,7 @@ export async function fetchLocationCoverage(): Promise<LocationCoverage[]> {
     const rec = byLoc.get(a.location_id) ?? { gm: false, hc: false, n: 0 }
     rec.n += 1
     if (a.positions?.name === 'General Manager') rec.gm = true
-    if (a.positions?.name === 'Head Chef') rec.hc = true
+    if (a.positions?.name === 'Chef de Cuisine' || a.positions?.name === 'Head Chef') rec.hc = true
     byLoc.set(a.location_id, rec)
   }
   return ((locs.data ?? []) as { id: string; name: string }[]).map((l) => {
@@ -148,7 +148,7 @@ export async function fetchLocationCoverage(): Promise<LocationCoverage[]> {
       locationId: l.id,
       locationName: l.name,
       hasGm: rec.gm,
-      hasHeadChef: rec.hc,
+      hasChefDeCuisine: rec.hc,
       leaders: rec.n,
     }
   })
