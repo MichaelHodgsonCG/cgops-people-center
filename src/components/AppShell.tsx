@@ -10,6 +10,7 @@ import {
   ChevronsRight,
   BarChart3,
   Database,
+  HelpCircle,
   Lightbulb,
   Network,
   LogOut,
@@ -21,6 +22,7 @@ import { signOut } from '../features/auth/useSession'
 import { can, toPermissionUser, type Resource } from '../permissions'
 import type { UserProfile } from '../types'
 import { SuggestionsPanel } from '../features/suggestions/SuggestionsPanel'
+import { HelpPanel } from '../features/help/HelpPanel'
 import monogram from '../assets/CG Logo Small.png'
 
 export type View = 'directory' | 'org_chart' | 'bench' | 'data_sources'
@@ -57,6 +59,7 @@ export function AppShell({
     () => localStorage.getItem(NAV_PREF_KEY) === '1',
   )
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
 
   function toggleNav() {
     setExpanded((prev) => {
@@ -118,6 +121,14 @@ export function AppShell({
           </div>
           <div className="flex items-center gap-2">
             <button
+              onClick={() => setHelpOpen(true)}
+              title="Help"
+              aria-label="Help"
+              className="rounded-md border border-surface-line p-1.5 text-charcoal/60 hover:bg-surface-muted hover:text-cg-orange"
+            >
+              <HelpCircle className="h-4 w-4" />
+            </button>
+            <button
               onClick={() => setSuggestionsOpen(true)}
               title="Suggestions"
               aria-label="Suggestions"
@@ -130,6 +141,8 @@ export function AppShell({
         </header>
         <main className="flex-1 bg-surface">{children}</main>
       </div>
+
+      {helpOpen && <HelpPanel onClose={() => setHelpOpen(false)} />}
 
       {suggestionsOpen && (
         <SuggestionsPanel

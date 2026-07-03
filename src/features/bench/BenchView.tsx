@@ -80,7 +80,7 @@ export function BenchView({ session, profile }: BenchViewProps) {
   }, [load])
 
   const riskLocations = useMemo(
-    () => locations.filter((l) => !l.hasGm || !l.hasHeadChef),
+    () => locations.filter((l) => !l.hasGm || !l.hasChefDeCuisine),
     [locations],
   )
   const thinSlots = useMemo(() => slots.filter((s) => s.candidates.length < 2), [slots])
@@ -100,7 +100,7 @@ export function BenchView({ session, profile }: BenchViewProps) {
           hint={`${slots.length} seat(s) planned`}
         />
         <Kpi
-          label="Locations missing GM or Head Chef"
+          label="Locations missing GM or Chef de Cuisine"
           value={riskLocations.length}
           tone={riskLocations.length > 0 ? 'danger' : 'ok'}
         />
@@ -173,7 +173,7 @@ export function BenchView({ session, profile }: BenchViewProps) {
               <tr className="border-b border-surface-line text-xs uppercase tracking-wide text-charcoal/50">
                 <th className="px-3 py-2 font-medium">Location</th>
                 <th className="px-3 py-2 font-medium">GM</th>
-                <th className="px-3 py-2 font-medium">Head Chef</th>
+                <th className="px-3 py-2 font-medium">Chef de Cuisine</th>
                 <th className="px-3 py-2 font-medium">Leaders</th>
               </tr>
             </thead>
@@ -182,7 +182,7 @@ export function BenchView({ session, profile }: BenchViewProps) {
                 <tr key={l.locationId} className="border-b border-surface-line/60 last:border-0">
                   <td className="px-3 py-2 font-medium">{l.locationName}</td>
                   <td className="px-3 py-2">{l.hasGm ? '✓' : <Missing />}</td>
-                  <td className="px-3 py-2">{l.hasHeadChef ? '✓' : <Missing />}</td>
+                  <td className="px-3 py-2">{l.hasChefDeCuisine ? '✓' : <Missing />}</td>
                   <td className="px-3 py-2">{l.leaders}</td>
                 </tr>
               ))}

@@ -116,7 +116,7 @@ begin
   ),
   hc as (
     select location_id, min(person_id::text)::uuid as hc_id
-    from pa where position_name = 'Head Chef' group by location_id
+    from pa where position_name in ('Head Chef', 'Chef de Cuisine') group by location_id
   )
   select r.location_id, r.regional_id, gm.gm_id, hc.hc_id
   from regional r
@@ -141,7 +141,7 @@ begin
   join public.people_center_positions pos on pos.id = a.position_id
   join _loc_leads ll on ll.location_id = a.location_id
   where a.person_id = p.id and a.is_primary and a.ended_on is null
-    and pos.name = 'Head Chef'
+    and pos.name in ('Head Chef', 'Chef de Cuisine')
     and p.manager_person_id is null
     and coalesce(ll.gm_id, ll.regional_id) is distinct from p.id;
 
