@@ -9,6 +9,8 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Database,
+  Lightbulb,
+  Network,
   LogOut,
   ShieldAlert,
   Users,
@@ -17,12 +19,14 @@ import {
 import { signOut } from '../features/auth/useSession'
 import { can, toPermissionUser, type Resource } from '../permissions'
 import type { UserProfile } from '../types'
+import { SuggestionsPanel } from '../features/suggestions/SuggestionsPanel'
 import monogram from '../assets/CG Logo Small.png'
 
-export type View = 'directory' | 'data_sources'
+export type View = 'directory' | 'org_chart' | 'data_sources'
 
 const NAV: { view: View; label: string; resource: Resource; icon: LucideIcon }[] = [
   { view: 'directory', label: 'Directory', resource: 'directory', icon: Users },
+  { view: 'org_chart', label: 'Org Chart', resource: 'org_chart', icon: Network },
   { view: 'data_sources', label: 'Data Sources', resource: 'data_sources', icon: Database },
 ]
 
@@ -50,6 +54,7 @@ export function AppShell({
   const [expanded, setExpanded] = useState(
     () => localStorage.getItem(NAV_PREF_KEY) === '1',
   )
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false)
 
   function toggleNav() {
     setExpanded((prev) => {
@@ -109,10 +114,28 @@ export function AppShell({
               CG Platform — Charcoal Group
             </span>
           </div>
-          <UserMenu session={session} profile={profile} profileError={profileError} />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSuggestionsOpen(true)}
+              title="Suggestions"
+              aria-label="Suggestions"
+              className="rounded-md border border-surface-line p-1.5 text-charcoal/60 hover:bg-surface-muted hover:text-cg-orange"
+            >
+              <Lightbulb className="h-4 w-4" />
+            </button>
+            <UserMenu session={session} profile={profile} profileError={profileError} />
+          </div>
         </header>
         <main className="flex-1 bg-surface">{children}</main>
       </div>
+
+      {suggestionsOpen && (
+        <SuggestionsPanel
+          profile={profile}
+          pageContext={view === 'data_sources' ? 'Data Sources' : view === 'org_chart' ? 'Org Chart' : 'Directory'}
+          onClose={() => setSuggestionsOpen(false)}
+        />
+      )}
     </div>
   )
 }

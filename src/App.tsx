@@ -3,6 +3,7 @@ import { useSession } from './features/auth/useSession'
 import { RedirectToCgops } from './features/auth/RedirectToCgops'
 import { AppShell, type View } from './components/AppShell'
 import { DirectoryView } from './features/directory/DirectoryView'
+import { OrgChartView } from './features/org/OrgChartView'
 import { can, toPermissionUser } from './permissions'
 
 // Lazy: the sync pipeline (and its xlsx parser) only loads for admins who
@@ -50,6 +51,8 @@ export default function App() {
         <Suspense fallback={<p className="p-6 text-sm text-charcoal/50">Loading…</p>}>
           <DataSourcesView profile={profile} />
         </Suspense>
+      ) : effectiveView === 'org_chart' ? (
+        <OrgChartView session={session} profile={profile} />
       ) : (
         <DirectoryView session={session} profile={profile} isAdmin={user?.role === 'admin'} />
       )}
