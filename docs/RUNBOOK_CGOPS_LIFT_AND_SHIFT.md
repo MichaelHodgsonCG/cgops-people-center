@@ -188,6 +188,17 @@ on conflict (auth_user_id) do update
 Do NOT add rows for anyone else. New access grants wait for Phase B and come
 from CGOPS profiles.
 
+**A6b — CGOPS admin bridge (added 2026-07-03).** Migration
+`20260703090000_cgops_admin_bridge.sql` (apply in the CGOPS SQL editor)
+redefines `people_center_is_admin()` so CGOPS platform admins
+(`public.user_profiles.role = 'admin'`) are People Center admins with no
+compat row at all — the compat row remains honoured but is no longer
+required for CGOPS admins. The app asks the same function via `rpc` when no
+compat row exists (`useSession.ts`), so UI and RLS cannot disagree. Verify
+the assumed CGOPS table/column/role values with the diagnostic in the
+migration header before applying. This is the admin-only subset of Phase B
+pulled forward; Phase B still replaces the rest and deletes the bridge.
+
 ### A7. No signup trigger — and drop the orphaned function
 
 Per the architecture decision, `people_center_on_auth_user_created` is NOT

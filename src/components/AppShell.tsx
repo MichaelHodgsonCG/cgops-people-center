@@ -67,7 +67,7 @@ export function AppShell({
         }`}
       >
         <div className="flex h-14 items-center justify-center border-b border-surface-line">
-          <img src={monogram} alt="CG" className="h-8 w-8" />
+          <img src={monogram} alt="CG" className="h-6 w-auto" />
         </div>
         <nav className="flex flex-1 flex-col gap-1 p-2" aria-label="Primary">
           {visibleNav.map((n) => {

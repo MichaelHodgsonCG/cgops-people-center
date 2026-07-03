@@ -14,7 +14,7 @@ export function RedirectToCgops() {
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-4">
-      <img src={monogram} alt="CG" className="h-12 w-12" />
+      <img src={monogram} alt="CG" className="h-12 w-auto" />
       {cgopsUrl ? (
         <p className="text-sm text-charcoal/50">Redirecting to CGOPS sign-in…</p>
       ) : (
