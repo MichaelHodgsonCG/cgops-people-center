@@ -52,19 +52,33 @@ export function useSession() {
       .select('*')
       .eq('auth_user_id', session.user.id)
       .maybeSingle()
-      .then(({ data, error }) => {
+      .then(async ({ data, error }) => {
         if (cancelled) return
         if (error) {
           setProfile(null)
           setProfileError(error.message)
-        } else {
-          setProfile((data as UserProfile | null) ?? null)
-          setProfileError(
-            data
-              ? null
-              : 'No people_center_user_profiles row for this login — run the admin bootstrap SQL (README).',
-          )
+          return
         }
+        if (data) {
+          setProfile(data as UserProfile)
+          setProfileError(null)
+          return
+        }
+        // Phase A bridge: no compat row — ask the database's single admin
+        // authority (people_center_is_admin() also recognizes CGOPS platform
+        // admins; see migration 20260703090000) and synthesize a profile so
+        // the UI and RLS cannot disagree about who is an admin.
+        const { data: isAdmin, error: rpcError } = await supabase.rpc(
+          'people_center_is_admin',
+        )
+        if (cancelled) return
+        if (rpcError) {
+          setProfile(null)
+          setProfileError(rpcError.message)
+          return
+        }
+        setProfile(bridgeProfile(session, isAdmin === true))
+        setProfileError(null)
       })
     return () => {
       cancelled = true
@@ -72,6 +86,25 @@ export function useSession() {
   }, [session])
 
   return { session, profile, profileError, loading }
+}
+
+// A CGOPS-authenticated user with no compat row: role comes from the
+// database's people_center_is_admin() (CGOPS platform admins → admin);
+// everyone else is a viewer until Phase B maps the full CGOPS role
+// vocabulary. person_id stays null — import attribution falls back to email.
+function bridgeProfile(session: Session, isAdmin: boolean): UserProfile {
+  return {
+    id: `cgops-bridge:${session.user.id}`,
+    auth_user_id: session.user.id,
+    email: session.user.email ?? '',
+    display_name: session.user.email ?? null,
+    role: isAdmin ? 'admin' : 'viewer',
+    person_id: null,
+    created_at: session.user.created_at ?? '',
+    updated_at: session.user.created_at ?? '',
+    updated_by: null,
+    updated_by_name: null,
+  }
 }
 
 export async function signOut() {
