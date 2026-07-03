@@ -20,7 +20,7 @@ import { signOut } from '../features/auth/useSession'
 import { can, toPermissionUser, type Resource } from '../permissions'
 import type { UserProfile } from '../types'
 import { SuggestionsPanel } from '../features/suggestions/SuggestionsPanel'
-import monogram from '../assets/cg-monogram.svg'
+import monogram from '../assets/CG Logo Small.png'
 
 export type View = 'directory' | 'org_chart' | 'data_sources'
 
