@@ -10,6 +10,7 @@ import {
   ChevronsRight,
   Database,
   Lightbulb,
+  Network,
   LogOut,
   ShieldAlert,
   Users,
@@ -21,10 +22,11 @@ import type { UserProfile } from '../types'
 import { SuggestionsPanel } from '../features/suggestions/SuggestionsPanel'
 import monogram from '../assets/cg-monogram.svg'
 
-export type View = 'directory' | 'data_sources'
+export type View = 'directory' | 'org_chart' | 'data_sources'
 
 const NAV: { view: View; label: string; resource: Resource; icon: LucideIcon }[] = [
   { view: 'directory', label: 'Directory', resource: 'directory', icon: Users },
+  { view: 'org_chart', label: 'Org Chart', resource: 'org_chart', icon: Network },
   { view: 'data_sources', label: 'Data Sources', resource: 'data_sources', icon: Database },
 ]
 
@@ -130,7 +132,7 @@ export function AppShell({
       {suggestionsOpen && (
         <SuggestionsPanel
           profile={profile}
-          pageContext={view === 'data_sources' ? 'Data Sources' : 'Directory'}
+          pageContext={view === 'data_sources' ? 'Data Sources' : view === 'org_chart' ? 'Org Chart' : 'Directory'}
           onClose={() => setSuggestionsOpen(false)}
         />
       )}

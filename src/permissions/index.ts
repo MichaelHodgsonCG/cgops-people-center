@@ -22,6 +22,7 @@ export type Resource =
   | 'shell'
   | 'admin_area'
   | 'directory'
+  | 'org_chart'
   | 'data_sources'
   | 'person' // profile editing, assignments, review-flag clearing
   | 'notes' // leadership/development/relationship capture
@@ -55,6 +56,7 @@ export function can(
   switch (resource) {
     case 'shell':
     case 'directory':
+    case 'org_chart':
       return action === 'view'
     case 'notes':
       return (
