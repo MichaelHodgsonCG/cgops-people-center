@@ -69,6 +69,7 @@ export function PersonPanel({ personId, session, profile, onClose, onChanged }: 
   const user = profile ? toPermissionUser(profile) : null
   const actor = actorFrom(profile, session)
   const isAdmin = user?.role === 'admin'
+  const canEdit = can(user, 'update', 'person')
 
   const [person, setPerson] = useState<PersonDetail | null>(null)
   const [notes, setNotes] = useState<Note[]>([])
@@ -159,7 +160,7 @@ export function PersonPanel({ personId, session, profile, onClose, onChanged }: 
             )}
           </div>
           <div className="flex items-center gap-2">
-            {isAdmin && person && (
+            {canEdit && person && (
               <button
                 onClick={() => setEditing((e) => !e)}
                 className="flex items-center gap-1.5 rounded-md border border-surface-line px-2.5 py-1.5 text-sm hover:bg-surface-muted"
@@ -187,10 +188,11 @@ export function PersonPanel({ personId, session, profile, onClose, onChanged }: 
           <p className="flex items-center gap-2 p-6 text-sm text-charcoal/50">
             <Loader2 className="h-4 w-4 animate-spin" /> Loading…
           </p>
-        ) : editing && isAdmin ? (
+        ) : editing && canEdit ? (
           <AdminEditor
             person={person}
             actor={actor}
+            canPurge={isAdmin}
             onSaved={() => {
               setEditing(false)
               reload()
@@ -508,10 +510,12 @@ function NoteForm({
 function AdminEditor({
   person,
   actor,
+  canPurge,
   onSaved,
 }: {
   person: PersonDetail
   actor: ReturnType<typeof actorFrom>
+  canPurge: boolean
   onSaved: () => void
 }) {
   const [edits, setEdits] = useState<ProfileEdits>({
@@ -591,9 +595,10 @@ function AdminEditor({
         </div>
       )}
 
+      {canPurge && (
       <div className="rounded-md border border-surface-line p-3 text-sm">
         <p className="mb-2 text-xs font-medium uppercase tracking-wide text-charcoal/50">
-          Retention actions
+          Retention actions (admin only)
         </p>
         <button
           onClick={() => {
@@ -615,6 +620,7 @@ function AdminEditor({
           Purge relationship notes (subject request)
         </button>
       </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3">
         <Field label="Preferred name">
