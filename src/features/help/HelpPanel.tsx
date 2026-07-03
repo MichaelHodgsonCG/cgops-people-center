@@ -44,8 +44,8 @@ export function HelpPanel({ onClose }: { onClose: () => void }) {
             One screen per person: role, location, reporting line, relocation
             interest, career goals, strengths, risks, notes, and their
             timeline. Use it before a visit or conversation so you start warm.
-            Admins can edit profiles, fix positions, and clear review flags
-            from the Edit button.
+            Admins and executives can edit profiles, fix positions and
+            reporting lines, and clear review flags from the Edit button.
           </Section>
 
           <Section title="Notes — and who can see them">
