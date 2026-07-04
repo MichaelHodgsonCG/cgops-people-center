@@ -178,17 +178,28 @@ export interface ProfileEdits {
   risks: string | null
 }
 
+/** RLS silently filters an UPDATE to zero rows when the caller's role lacks
+ * the policy — PostgREST reports success either way. Every people write
+ * checks the affected count so a blocked save FAILS LOUDLY instead of
+ * pretending (the lesson from the vanishing-note bug, applied to writes). */
+const PERMISSION_HINT =
+  'The database did not accept this save — your role does not have ' +
+  'people-edit permission there. Admins: check that migration ' +
+  '20260704160000_executives_edit_people.sql has been applied.'
+
 export async function updatePersonProfile(
   actor: Actor,
   personId: string,
   personName: string,
   edits: ProfileEdits,
 ): Promise<void> {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('people_center_people')
     .update({ ...edits, updated_by: actor.personId, updated_by_name: actor.name })
     .eq('id', personId)
+    .select('id')
   if (error) throw error
+  if (!data || data.length === 0) throw new Error(PERMISSION_HINT)
   await recordAudit(actor, 'update', 'person', personId, personName, 'Updated profile')
 }
 
@@ -197,7 +208,7 @@ export async function clearReviewFlag(
   personId: string,
   personName: string,
 ): Promise<void> {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('people_center_people')
     .update({
       data_quality_status: 'ok',
@@ -206,7 +217,9 @@ export async function clearReviewFlag(
       updated_by_name: actor.name,
     })
     .eq('id', personId)
+    .select('id')
   if (error) throw error
+  if (!data || data.length === 0) throw new Error(PERMISSION_HINT)
   await recordAudit(
     actor,
     'update',
@@ -262,11 +275,22 @@ export async function reassignPrimary(
     (a) => a.is_primary && !a.ended_on,
   )
   if (currentPrimary) {
-    const { error } = await supabase
+    // Must fail loudly: if RLS filters this to zero rows, the insert below
+    // would collide with the still-open primary (one-current-primary index)
+    // and surface as a confusing duplicate-key error.
+    const { data: ended, error } = await supabase
       .from('people_center_position_assignments')
       .update({ ended_on: today, updated_by_name: actor.name })
       .eq('id', currentPrimary.id)
+      .select('id')
     if (error) throw error
+    if (!ended || ended.length === 0) {
+      throw new Error(
+        'Could not end the current assignment — your role does not have ' +
+          'assignment-edit permission in the database. Admins: check that ' +
+          'migration 20260704160000_executives_edit_people.sql has been applied.',
+      )
+    }
   }
   const { data, error } = await supabase
     .from('people_center_position_assignments')
@@ -280,7 +304,17 @@ export async function reassignPrimary(
     })
     .select('id')
     .single()
-  if (error) throw error
+  if (error) {
+    if (error.code === '23505') {
+      throw new Error(
+        'This person already has a current primary assignment that could not ' +
+          'be replaced. Open their panel again (the list may be stale) and ' +
+          'retry; if it persists, an admin should end the extra open ' +
+          'assignment.',
+      )
+    }
+    throw error
+  }
 
   await recordAudit(
     actor,

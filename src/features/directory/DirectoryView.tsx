@@ -35,10 +35,18 @@ const KIND_LABELS: Record<DirectoryPerson['person_kind'], string> = {
   key_team_member: 'Key team member',
 }
 
+// Prefer a real open assignment over the sync pipeline's 'Needs Position
+// Review' placeholder when a fixed review import still carries both.
+const PLACEHOLDER_POSITION = 'Needs Position Review'
+
 function currentPrimary(person: DirectoryPerson) {
+  const open = person.position_assignments.filter((a) => !a.ended_on)
+  const real = open.filter((a) => a.positions?.name !== PLACEHOLDER_POSITION)
   return (
-    person.position_assignments.find((a) => a.is_primary && !a.ended_on) ??
-    person.position_assignments.find((a) => !a.ended_on) ??
+    real.find((a) => a.is_primary) ??
+    real[0] ??
+    open.find((a) => a.is_primary) ??
+    open[0] ??
     null
   )
 }
