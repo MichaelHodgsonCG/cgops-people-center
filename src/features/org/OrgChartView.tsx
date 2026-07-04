@@ -32,10 +32,19 @@ interface TreeNode {
   descendants: number
 }
 
+// The sync pipeline's placeholder for unresolved positions. When someone
+// carries both an open placeholder and an open real assignment (a fixed
+// review import whose placeholder was never ended), show the real one.
+const PLACEHOLDER_POSITION = 'Needs Position Review'
+
 function primaryOf(p: OrgPerson) {
+  const open = p.position_assignments.filter((a) => !a.ended_on)
+  const real = open.filter((a) => a.positions?.name !== PLACEHOLDER_POSITION)
   return (
-    p.position_assignments.find((a) => a.is_primary && !a.ended_on) ??
-    p.position_assignments.find((a) => !a.ended_on) ??
+    real.find((a) => a.is_primary) ??
+    real[0] ??
+    open.find((a) => a.is_primary) ??
+    open[0] ??
     null
   )
 }

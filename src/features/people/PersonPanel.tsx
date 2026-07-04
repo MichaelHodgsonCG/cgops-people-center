@@ -218,12 +218,13 @@ export function PersonPanel({ personId, session, profile, onClose, onChanged }: 
               </h3>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
                 <Fact label="Reporting line" value={managerName ?? '—'} />
-                <Fact label="Hired" value={person.hire_date ?? 'Unknown'} />
                 <Fact
                   label="Relocation"
                   value={RELOCATION_LABELS[person.relocation_interest]}
                 />
                 <Fact label="Home city" value={person.home_city ?? '—'} />
+                <Fact label="Email" value={person.email ?? '—'} />
+                <Fact label="Phone" value={person.phone ?? '—'} />
               </dl>
               {otherCurrent.length > 0 && (
                 <p className="mt-2 text-xs text-charcoal/60">
