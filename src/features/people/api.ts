@@ -368,7 +368,13 @@ export async function fetchReferenceOptions(): Promise<{
   locations: ReferenceOption[]
 }> {
   const [pos, loc] = await Promise.all([
-    supabase.from('people_center_positions').select('id, name').order('name'),
+    // Only positions People Center curates for its pickers (ADR 0012) — the
+    // full CGOPS catalog (Server, Dishwasher, …) stays hidden.
+    supabase
+      .from('people_center_positions')
+      .select('id, name')
+      .eq('show_in_people_center', true)
+      .order('name'),
     supabase.from('people_center_locations').select('id, name').order('name'),
   ])
   if (pos.error) throw pos.error
