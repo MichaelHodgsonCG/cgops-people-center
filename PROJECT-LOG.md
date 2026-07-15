@@ -1,5 +1,12 @@
 # Project Log
 
+## [2026-07-15] Position vocabulary sync (CGOPS -> People Center)
+**Shipped:**   People Center positions now sync from the CGOPS Operational Center master instead of being a hand-seeded copy. New Data Sources → Positions tab: "Sync from CGOPS" button + a grid to toggle show-in-pickers / roster-eligibility / default kind per position. `people_center_sync_positions_from_cgops()` links by external_ref, refreshes CGOPS-owned fields, and materializes new CGOPS positions hidden+ineligible until curated. Pickers filter to curated positions; `Needs Position Review` placeholder hidden. Adding an HQ position = add once in CGOPS, sync, toggle on.
+**Roadmap:**   Position vocabulary sharing -> complete (code shipped; migration 20260715120000 applied + verified on live project)
+**Decisions:** Sync two tables over one shared table (ADR 0012) — the two lists are different curations (membership/granularity/columns), so sharing re-encodes the divergence + forces a live FK migration + couples PC to CGOPS lifecycle; field ownership (CGOPS=name/desc, PC=config) makes bi-directional editing safe; PC-side pull, not a CGOPS trigger, to keep PC logic off CGOPS's write path.
+**Blockers:**  none
+**Next:**      Deploy frontend; run first "Sync from CGOPS" (admin, in-app) to materialize the CGOPS catalog; toggle on HQ positions and fix Supervisor roster-eligibility drift in the same panel.
+
 ## [2026-07-15] Manual add + admin-confirmed Push linking
 **Shipped:**   Add people by hand from the Directory — HQ (active, off-roster) and candidates (not-yet-hired), alongside incoming hires. A roster sync that name-matches an unlinked manual profile now holds it as a "possible match" (Data Sources → Pending links) for an admin to Confirm (links Push identity, preserves manual data) or Reject (imports as new). Candidates stay off the org chart. Confirmed answer to the sync-behavior question: uploads add + link, never merge/overwrite leadership-entered data.
 **Roadmap:**   Manual people & Push linking -> complete (code); deploy + migration -> in progress (owner running)

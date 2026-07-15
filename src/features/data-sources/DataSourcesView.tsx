@@ -21,6 +21,13 @@ import {
   rejectLink,
   type PendingLink,
 } from './pipeline/links'
+import {
+  fetchPositionsAdmin,
+  syncPositionsFromCgops,
+  updatePositionConfig,
+  type PositionAdminRow,
+  type PositionSyncResult,
+} from './positions'
 import type { ClassifiedRow } from './pipeline/types'
 import { DevPathsPanel } from './DevPathsPanel'
 
@@ -42,7 +49,7 @@ export function DataSourcesView({
   session: Session | null
 }) {
   const actor = actorFrom(profile, session)
-  const [source, setSource] = useState<'roster' | 'dev_paths'>('roster')
+  const [source, setSource] = useState<'roster' | 'dev_paths' | 'positions'>('roster')
   const [stage, setStage] = useState<Stage>({ kind: 'idle' })
   // Bumped after a commit so the pending-links panel re-checks for new matches.
   const [linksToken, setLinksToken] = useState(0)
@@ -111,9 +118,20 @@ export function DataSourcesView({
         >
           Development paths
         </button>
+        <button
+          onClick={() => setSource('positions')}
+          className={`rounded-md px-3 py-1.5 text-sm font-medium ${
+            source === 'positions'
+              ? 'bg-charcoal text-white'
+              : 'border border-surface-line hover:bg-surface-muted'
+          }`}
+        >
+          Positions
+        </button>
       </div>
 
       {source === 'dev_paths' && <DevPathsPanel profile={profile} />}
+      {source === 'positions' && <PositionsPanel />}
 
       {source === 'roster' && (
         <>
@@ -416,5 +434,173 @@ function PendingLinksPanel({ actor, token }: { actor: Actor; token: number }) {
         ))}
       </ul>
     </div>
+  )
+}
+
+const KIND_OPTIONS: { value: PositionAdminRow['default_person_kind']; label: string }[] = [
+  { value: 'manager', label: 'Manager' },
+  { value: 'emerging_leader', label: 'Emerging leader' },
+  { value: 'key_team_member', label: 'Key team member' },
+]
+
+// The People Center side of the CGOPS position vocabulary (ADR 0012). "Sync
+// from CGOPS" pulls the master; new CGOPS positions arrive hidden + ineligible
+// and an admin curates them here. CGOPS owns name/description; this panel owns
+// visibility, sync-eligibility, and default kind.
+function PositionsPanel() {
+  const [rows, setRows] = useState<PositionAdminRow[] | null>(null)
+  const [syncing, setSyncing] = useState(false)
+  const [result, setResult] = useState<PositionSyncResult | null>(null)
+  const [savingId, setSavingId] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(() => {
+    fetchPositionsAdmin()
+      .then(setRows)
+      .catch((e: Error) => setError(e.message))
+  }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  async function sync() {
+    setSyncing(true)
+    setError(null)
+    try {
+      setResult(await syncPositionsFromCgops())
+      load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  async function patch(row: PositionAdminRow, p: Partial<PositionAdminRow>) {
+    setSavingId(row.id)
+    setError(null)
+    // Optimistic — reflect immediately, roll back on failure.
+    setRows((prev) => prev?.map((r) => (r.id === row.id ? { ...r, ...p } : r)) ?? prev)
+    try {
+      await updatePositionConfig(row.id, p)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      load()
+    } finally {
+      setSavingId(null)
+    }
+  }
+
+  return (
+    <>
+      <h2 className="mb-1 text-lg font-medium">Data Sources — Positions</h2>
+      <p className="mb-4 text-sm text-charcoal/60">
+        Positions come from CGOPS (Operational Center → Positions). Sync pulls
+        the master; CGOPS owns each position's name. People Center owns whether
+        it's <b>shown</b> in pickers, whether holders are <b>eligible</b> for
+        the roster sync, and the default <b>kind</b>. New CGOPS positions arrive
+        hidden — turn on the ones you want (e.g. HQ roles).
+      </p>
+
+      <div className="mb-4 flex items-center gap-3">
+        <button
+          onClick={() => void sync()}
+          disabled={syncing}
+          className="flex items-center gap-1.5 rounded-md bg-cg-orange px-3 py-1.5 text-sm font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
+        >
+          <FileSpreadsheet className="h-4 w-4" />
+          {syncing ? 'Syncing…' : 'Sync from CGOPS'}
+        </button>
+        {result && (
+          <p className="text-xs text-charcoal/60">
+            {result.created} new · {result.updated} refreshed · {result.linked} linked
+          </p>
+        )}
+      </div>
+
+      {error && <p className="mb-3 text-sm text-danger">{error}</p>}
+
+      {!rows ? (
+        <p className="p-2 text-sm text-charcoal/50">Loading positions…</p>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-surface-line bg-surface">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-surface-line text-xs uppercase tracking-wide text-charcoal/50">
+                <th className="px-3 py-2.5 font-medium">Position</th>
+                <th className="px-3 py-2.5 font-medium">CGOPS</th>
+                <th className="px-3 py-2.5 font-medium">Show</th>
+                <th className="px-3 py-2.5 font-medium">Roster-eligible</th>
+                <th className="px-3 py-2.5 font-medium">Default kind</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr
+                  key={r.id}
+                  className={`border-b border-surface-line/60 last:border-0 ${
+                    r.show_in_people_center ? '' : 'text-charcoal/40'
+                  }`}
+                >
+                  <td className="px-3 py-2 font-medium">{r.name}</td>
+                  <td className="px-3 py-2 text-xs">
+                    {r.external_ref ? (
+                      <span className="text-success">linked</span>
+                    ) : (
+                      <span className="text-charcoal/40">local only</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={r.show_in_people_center}
+                      disabled={savingId === r.id}
+                      onChange={(e) =>
+                        void patch(r, { show_in_people_center: e.target.checked })
+                      }
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={r.people_center_eligible}
+                      disabled={savingId === r.id}
+                      onChange={(e) =>
+                        void patch(r, { people_center_eligible: e.target.checked })
+                      }
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <select
+                      value={r.default_person_kind}
+                      disabled={savingId === r.id}
+                      onChange={(e) =>
+                        void patch(r, {
+                          default_person_kind:
+                            e.target.value as PositionAdminRow['default_person_kind'],
+                        })
+                      }
+                      className="rounded-md border border-surface-line bg-surface px-2 py-1 text-sm text-charcoal"
+                    >
+                      {KIND_OPTIONS.map((k) => (
+                        <option key={k.value} value={k.value}>
+                          {k.label}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="mt-3 text-xs text-charcoal/50">
+        "Roster-eligible" decides whether a Push roster sync brings holders of
+        this position into People Center — leave HQ / off-roster positions
+        unchecked.
+      </p>
+    </>
   )
 }
