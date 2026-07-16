@@ -1,5 +1,12 @@
 # Project Log
 
+## [2026-07-16] Restaurant GMs joined to Regional Ops (roadmap 2) + Caitlin dedup
+**Shipped:**   Verified the company chart is one connected tree: all 16 restaurant GMs → their Regional Operations Leader → John Mackay → Jody (CEO). The GM→ROL links were already set by the 1c HQ seed, so item 2 was functionally done. Found + fixed the one blemish: a duplicated Regional Operations Leader (HQ-seed off-roster stub with the title but no team vs. the real roster record with the 2 GMs but no title). Consolidated onto the roster record — added the ROL title to it (GMs already attached), ended the stub's assignment and marked the stub departed so it drops off the chart. Live data op (no code change). Final: Tami 4 GMs, Chris 3, Caitlin/Camilla/Danny 2 each (all → John Mackay); Cindy 3 (→ CEO).
+**Roadmap:**   Roadmap item 2 (GMs → Regional Ops Leader, one company-wide chart) -> complete (live). No migration — data-only.
+**Decisions:** Consolidate the duplicate onto the real roster record, not the seed stub (keeps the true identity + correct "Caitlin" spelling); retire the stub via status=departed (reversible) rather than hard delete. The stub/roster pair slipped past exact-name dedup because the seed misspelled the surname vs. the roster.
+**Blockers:**  none
+**Next:**      Roadmap 3: a way to ignore/remove non-emerging-leader Supervisors from the pipeline view (Michael's ask).
+
 ## [2026-07-16] Org-chart siblings ordered by seniority (roadmap 1)
 **Shipped:**   OrgChartView now orders sibling nodes by position `level` (lower = more senior: GM 10 → AGM 25 → Sous 40 …) with full name as tiebreaker, instead of alphabetically. Query pulls `people_center_positions.level`; unranked positions sort last so a missing level never jumps someone above real managers. Applies to both list and chart views (they share `buildForest`). Frontend-only — deploy on Vercel to see it.
 **Roadmap:**   Roadmap item 1 (org-chart seniority ordering) -> complete (code; deploy pending). Build passes (tsc + vite).
