@@ -30,7 +30,7 @@ import {
   type MgmtPosition,
   type RoleRequirement,
 } from './api'
-import { downloadCompanyGapDocx, downloadGapDocx } from './docx'
+import { downloadCompanyGapXlsx, downloadGapXlsx } from './excel'
 import type { UserProfile } from '../../types'
 
 const ALL = '__all__'
@@ -162,14 +162,14 @@ export function GapView({ session, profile }: GapViewProps) {
     }
   }
 
-  async function exportDocx() {
+  async function exportExcel() {
     setExporting(true)
     setError(null)
     try {
       if (isAll) {
-        await downloadCompanyGapDocx({ rows: sortedCompany, generatedOn: new Date().toLocaleDateString() })
+        await downloadCompanyGapXlsx({ rows: sortedCompany, generatedOn: new Date().toLocaleDateString() })
       } else if (selected && rows.length > 0) {
-        await downloadGapDocx({
+        await downloadGapXlsx({
           locationName: selected.name,
           upcoming,
           rows: rows.map((r) => ({
@@ -260,11 +260,11 @@ export function GapView({ session, profile }: GapViewProps) {
           </span>
         )}
         <button
-          onClick={() => void exportDocx()}
+          onClick={() => void exportExcel()}
           disabled={exporting || (isAll ? company.length === 0 : rows.length === 0)}
           className="ml-auto flex items-center gap-1.5 rounded-md border border-surface-line px-2.5 py-1.5 text-xs font-medium hover:bg-surface-muted disabled:opacity-50"
         >
-          <Download className="h-3.5 w-3.5" /> {exporting ? 'Preparing…' : 'Download .docx'}
+          <Download className="h-3.5 w-3.5" /> {exporting ? 'Preparing…' : 'Download Excel'}
         </button>
       </div>
 

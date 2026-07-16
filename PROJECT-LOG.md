@@ -1,5 +1,12 @@
 # Project Log
 
+## [2026-07-16] Gap export switched from Word to Excel (.xlsx)
+**Shipped:**   The gap report "Download" now produces **Excel (.xlsx)** instead of Word. Uses the `xlsx` (SheetJS) lib already in the repo (import pipeline), dynamic-imported. Both company-wide and single-location exports, with column widths, header/total rows, and the summary line. Removed the `docx` dependency + gaps/docx.ts. Verified in Node: valid .xlsx (PK zip, 17 KB) and a round-trip parse (XLSX.read → sheet_to_json returns the rows) — which also confirms the parse-back path for the requested Excel-import feature.
+**Roadmap:**   Export format -> Excel (Michael's request). Requested next: accept a filled-in Excel back and parse it (scoping — what the upload should do, e.g. record who's slated into each open role).
+**Decisions:** Reuse xlsx (already a dependency) over adding a spreadsheet lib; drop docx entirely (no dual formats). writeFile in-browser triggers the download.
+**Blockers:**  none
+**Next:**      Scope + build the Excel round-trip import (fill gaps → upload → apply). Then per-concept required counts / urgency.
+
 ## [2026-07-16] Gap analysis: sortable company-wide table
 **Shipped:**   The company-wide gap table now has sortable column headers — click Location, Role (by seniority/level), Gap (biggest first), or Type (new-site → backfill → understaffed) to re-sort; arrow indicator on the active column. Client-side sort of the already-fetched rows (mirrors the Directory's SortableHeader pattern). The .docx export follows the on-screen sort. Build passes.
 **Roadmap:**   Gap report usability tweak. Company-wide report + backfill remain complete.

@@ -142,9 +142,11 @@ op (employee names intentionally kept out of the repo).
      projected = current − movers (a mover = someone in-seat at an open site who
      is a succession incumbent at an opening site). Both the company and
      single-location views count PRIMARY assignments so they never disagree.
-   - **.docx export DONE (live):** "Download .docx" exports the current view —
-     single-location or the full company-wide report — via the `docx` lib
-     (dynamic-imported lazy chunk). `gaps/docx.ts`.
+   - **Excel (.xlsx) export DONE (live):** "Download Excel" exports the current
+     view — single-location or the full company-wide report — via the `xlsx`
+     (SheetJS) lib already used by the import pipeline (dynamic-imported).
+     `gaps/excel.ts`. (Was `.docx`/`docx` lib — swapped to Excel per Michael;
+     docx dependency removed.)
    - **Observed:** with the seeded roster, ~35 understaffed gaps across EXISTING
      sites — many don't match the ideal roster (e.g. no Guest Service/Beverage
      Mgr). Real, not a bug; Michael can trim the required roster or (later) set
