@@ -6,9 +6,11 @@ import {
   ArrowUp,
   ChevronDown,
   ChevronsUpDown,
+  ListChecks,
   Search,
   UserPlus,
   Users,
+  X,
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { actorFrom } from '../../lib/activity'
@@ -16,6 +18,7 @@ import { can, toPermissionUser } from '../../permissions'
 import { PersonPanel } from '../people/PersonPanel'
 import {
   addPerson,
+  bulkSetStatus,
   fetchReferenceOptions,
   type ReferenceOption,
 } from '../people/api'
@@ -44,6 +47,16 @@ const KIND_LABELS: Record<DirectoryPerson['person_kind'], string> = {
   emerging_leader: 'Emerging leader',
   key_team_member: 'Key team member',
 }
+
+// Statuses offered in bulk edit. 'departed' drops people from the directory and
+// org chart (how you prune roles like non-pipeline Supervisors); 'active'/'leave'
+// bring them back or park them. Onboarding states (candidate/incoming) aren't
+// bulk-applied.
+const BULK_STATUS_OPTIONS: { value: DirectoryPerson['status']; label: string }[] = [
+  { value: 'departed', label: 'Departed — remove from directory & org chart' },
+  { value: 'leave', label: 'On leave' },
+  { value: 'active', label: 'Active' },
+]
 
 // Prefer a real open assignment over the sync pipeline's 'Needs Position
 // Review' placeholder when a fixed review import still carries both.
@@ -100,6 +113,12 @@ export function DirectoryView({ session, profile, isAdmin }: DirectoryViewProps)
   const [sortKey, setSortKey] = useState<SortKey>('name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // Bulk edit: pick a role via the filters, select rows, set one status.
+  const [bulkMode, setBulkMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [bulkStatus, setBulkStatus] = useState<DirectoryPerson['status']>('departed')
+  const [applying, setApplying] = useState(false)
+  const [bulkError, setBulkError] = useState<string | null>(null)
 
   const load = useCallback(() => {
     supabase
@@ -186,6 +205,56 @@ export function DirectoryView({ session, profile, isAdmin }: DirectoryViewProps)
     }
   }
 
+  function exitBulk() {
+    setBulkMode(false)
+    setSelectedIds(new Set())
+    setBulkError(null)
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  // Header checkbox acts on the currently-filtered rows only.
+  const allFilteredSelected = sorted.length > 0 && sorted.every((p) => selectedIds.has(p.id))
+  function toggleSelectAllFiltered() {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (sorted.every((p) => next.has(p.id))) sorted.forEach((p) => next.delete(p.id))
+      else sorted.forEach((p) => next.add(p.id))
+      return next
+    })
+  }
+
+  async function applyBulk() {
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+    const label = BULK_STATUS_OPTIONS.find((o) => o.value === bulkStatus)?.label ?? bulkStatus
+    if (
+      !window.confirm(
+        `Set ${ids.length} ${ids.length === 1 ? 'person' : 'people'} to "${label}"? ` +
+          `This is reversible — set them Active again to undo.`,
+      )
+    )
+      return
+    setApplying(true)
+    setBulkError(null)
+    try {
+      await bulkSetStatus(actor, ids, bulkStatus)
+      exitBulk()
+      load()
+    } catch (e) {
+      setBulkError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setApplying(false)
+    }
+  }
+
   if (loading) {
     return <p className="p-6 text-sm text-charcoal/50">Loading directory…</p>
   }
@@ -246,15 +315,70 @@ export function DirectoryView({ session, profile, isAdmin }: DirectoryViewProps)
             </span>
           )}
         </p>
-        {canAddHire && (
-          <button
-            onClick={() => setAddingHire((v) => !v)}
-            className="flex items-center gap-1.5 rounded-md border border-surface-line px-2.5 py-1.5 text-xs font-medium hover:bg-surface-muted"
-          >
-            <UserPlus className="h-3.5 w-3.5" /> Add person
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {isAdmin && !bulkMode && (
+            <button
+              onClick={() => {
+                setBulkMode(true)
+                setAddingHire(false)
+              }}
+              className="flex items-center gap-1.5 rounded-md border border-surface-line px-2.5 py-1.5 text-xs font-medium hover:bg-surface-muted"
+            >
+              <ListChecks className="h-3.5 w-3.5" /> Bulk edit
+            </button>
+          )}
+          {canAddHire && !bulkMode && (
+            <button
+              onClick={() => setAddingHire((v) => !v)}
+              className="flex items-center gap-1.5 rounded-md border border-surface-line px-2.5 py-1.5 text-xs font-medium hover:bg-surface-muted"
+            >
+              <UserPlus className="h-3.5 w-3.5" /> Add person
+            </button>
+          )}
+        </div>
       </div>
+
+      {bulkMode && (
+        <div className="mb-3 rounded-xl border border-cg-orange/40 bg-cg-orange-soft/40 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">
+              {selectedIds.size} selected
+            </span>
+            <span className="text-xs text-charcoal/60">
+              Tip: filter by position first, then “Select all”.
+            </span>
+            <div className="ml-auto flex items-center gap-2">
+              <label className="text-xs text-charcoal/60">Set status</label>
+              <select
+                value={bulkStatus}
+                onChange={(e) => setBulkStatus(e.target.value as DirectoryPerson['status'])}
+                className="rounded-md border border-surface-line bg-surface px-2 py-1.5 text-sm"
+              >
+                {BULK_STATUS_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => void applyBulk()}
+                disabled={applying || selectedIds.size === 0}
+                className="rounded-md bg-cg-orange px-3 py-1.5 text-sm font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
+              >
+                {applying ? 'Applying…' : `Apply to ${selectedIds.size}`}
+              </button>
+              <button
+                onClick={exitBulk}
+                aria-label="Exit bulk edit"
+                className="flex items-center gap-1 rounded-md border border-surface-line px-2.5 py-1.5 text-xs hover:bg-surface-muted"
+              >
+                <X className="h-3.5 w-3.5" /> Done
+              </button>
+            </div>
+          </div>
+          {bulkError && <p className="mt-2 text-xs text-danger">{bulkError}</p>}
+        </div>
+      )}
 
       {addingHire && (
         <AddPersonForm
@@ -289,6 +413,16 @@ export function DirectoryView({ session, profile, isAdmin }: DirectoryViewProps)
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="border-b border-surface-line text-xs uppercase tracking-wide text-charcoal/50">
+                {bulkMode && (
+                  <th className="w-10 px-4 py-3">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all filtered"
+                      checked={allFilteredSelected}
+                      onChange={toggleSelectAllFiltered}
+                    />
+                  </th>
+                )}
                 <SortableHeader label="Name" sortAs="name" current={sortKey} dir={sortDir} onSort={toggleSort} />
                 <SortableHeader label="Position" sortAs="position" current={sortKey} dir={sortDir} onSort={toggleSort} />
                 <SortableHeader label="Location" sortAs="location" current={sortKey} dir={sortDir} onSort={toggleSort} />
@@ -302,9 +436,22 @@ export function DirectoryView({ session, profile, isAdmin }: DirectoryViewProps)
                 return (
                   <tr
                     key={p.id}
-                    onClick={() => setSelectedId(p.id)}
-                    className="cursor-pointer border-b border-surface-line/60 last:border-0 hover:bg-surface-muted/60"
+                    onClick={() => (bulkMode ? toggleSelect(p.id) : setSelectedId(p.id))}
+                    className={`cursor-pointer border-b border-surface-line/60 last:border-0 hover:bg-surface-muted/60 ${
+                      bulkMode && selectedIds.has(p.id) ? 'bg-cg-orange-soft/40' : ''
+                    }`}
                   >
+                    {bulkMode && (
+                      <td className="w-10 px-4 py-2.5">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${p.full_name}`}
+                          checked={selectedIds.has(p.id)}
+                          onChange={() => toggleSelect(p.id)}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      </td>
+                    )}
                     <td className="px-4 py-2.5 font-medium">
                       <span className="flex items-center gap-2">
                         {p.full_name}

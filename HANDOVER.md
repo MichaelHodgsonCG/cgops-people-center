@@ -73,13 +73,19 @@ op (employee names intentionally kept out of the repo).
   or overwrite** leadership-entered data.
 
 ## Roadmap / what's next (priority order)
-1. **Org-chart ordering by `level`** (frontend, small): `OrgChartView` still
-   sorts siblings alphabetically; sort by position level then name. Data exists.
-2. **Connect restaurant GMs to their Regional Ops Leader** so the HQ tree and
-   restaurant trees form one company-wide chart (set `manager_person_id`).
-3. **Ignore/remove non-emerging-leader Supervisors** (Michael's ask): a way to
-   prune supervisors who aren't leadership-pipeline. (Supervisor is currently
-   `people_center_eligible = true` — left as-is by his call.)
+1. ~~**Org-chart ordering by `level`**~~ — DONE (live). Siblings sort by level;
+   chart view also staggers siblings vertically by rank so a Chef de Cuisine
+   renders above the managers sharing its GM (--oc-drop in orgChart.css).
+2. ~~**Connect restaurant GMs to their Regional Ops Leader**~~ — DONE (live).
+   Whole company is one tree; fixed a duplicated Regional Ops Leader too.
+   Reporting lines are now editable in-UI (person panel → Reporting line picker).
+3. ~~**Ignore/remove non-emerging-leader Supervisors**~~ — TOOLING DONE (live):
+   Directory → **Bulk edit** (admin) sets status on many people at once; set
+   non-pipeline Supervisors to `departed` to drop them from directory + chart.
+   Durable across Push syncs (roster-linked people are "not modified" on
+   re-sync). Michael applies the actual pruning.
+   NEW backlog item: **cleaner mobile Directory** — a mobile-first directory
+   page with better filtering for use in the field (complements the Visit view).
 4. **Phase 2 — future org view:** upcoming/planned locations with a picker to
    layer them onto the org chart with slated incumbents. Pull **turnover /
    opening dates** from the **New Restaurant Center** (a CGOPS module in the

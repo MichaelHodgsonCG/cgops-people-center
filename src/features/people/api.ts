@@ -539,3 +539,31 @@ export async function setManager(
     manager_name: managerName,
   })
 }
+
+/** Set the same status on many people at once (bulk pruning/reactivating).
+ * Fails loud if RLS filters the UPDATE to zero rows. Returns the number
+ * actually updated and records a single audit row summarizing the batch. */
+export async function bulkSetStatus(
+  actor: Actor,
+  personIds: string[],
+  status: PersonDetail['status'],
+): Promise<number> {
+  if (personIds.length === 0) return 0
+  const { data, error } = await supabase
+    .from('people_center_people')
+    .update({ status, updated_by: actor.personId, updated_by_name: actor.name })
+    .in('id', personIds)
+    .select('id')
+  if (error) throw error
+  const updated = data?.length ?? 0
+  if (updated === 0) throw new Error(PERMISSION_HINT)
+  await recordAudit(
+    actor,
+    'update',
+    'person',
+    null,
+    `${updated} people`,
+    `Bulk status → ${status} (${updated} of ${personIds.length} selected)`,
+  )
+  return updated
+}
