@@ -103,6 +103,139 @@ export async function fetchGapLocations(): Promise<GapLocation[]> {
   return (data as unknown as GapLocation[]) ?? []
 }
 
+export type GapReason = 'new-site' | 'backfill' | 'understaffed'
+
+export interface CompanyGap {
+  location_name: string
+  location_status: 'open' | 'opening'
+  position_name: string
+  level: number | null
+  required: number
+  projected: number
+  gap: number
+  reason: GapReason
+  detail: string // movers "Name → Dest" (backfill), slated names (new-site), or ''
+}
+
+/** Company-wide missing roles across every location, accounting for moves: an
+ * existing leader slated to a new site vacates their current seat, creating a
+ * backfill gap at the origin. Three kinds: new-site (upcoming seats not yet
+ * slated), backfill (open site losing someone to a new site), understaffed
+ * (open site already below the required roster). */
+export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
+  const [reqs, locs, assignRes, slotRes] = await Promise.all([
+    fetchRoleRequirements(),
+    fetchGapLocations(),
+    supabase
+      .from('people_center_position_assignments')
+      .select(
+        `position_id, is_primary, ended_on,
+         person:people_center_people ( id, full_name, status ),
+         location:people_center_locations ( id, status )`,
+      )
+      .eq('is_primary', true)
+      .is('ended_on', null),
+    supabase
+      .from('people_center_succession_slots')
+      .select(
+        `position_id, incumbent_person_id,
+         incumbent:people_center_people!people_center_succession_slots_incumbent_person_id_fkey ( full_name ),
+         location:people_center_locations ( id, name, status )`,
+      ),
+  ])
+  if (assignRes.error) throw assignRes.error
+  if (slotRes.error) throw slotRes.error
+
+  const required = reqs.filter((r) => r.required_count > 0)
+  const key = (locId: string, posId: string) => `${locId}|${posId}`
+
+  // Current seats at OPEN locations, and everyone's origin (person → their seat).
+  type A = {
+    position_id: string | null
+    person: { id: string; full_name: string; status: string } | null
+    location: { id: string; status: string } | null
+  }
+  const curByCell = new Map<string, { id: string; name: string }[]>()
+  for (const a of (assignRes.data as unknown as A[]) ?? []) {
+    if (!a.position_id || !a.location || a.location.status !== 'open') continue
+    if (!a.person || (a.person.status !== 'active' && a.person.status !== 'leave')) continue
+    const k = key(a.location.id, a.position_id)
+    const arr = curByCell.get(k) ?? []
+    arr.push({ id: a.person.id, name: a.person.full_name })
+    curByCell.set(k, arr)
+  }
+
+  // Slated leaders at OPENING locations → the future fill there, and the set of
+  // people moving (person → destination) that drives backfill at their origin.
+  type S = {
+    position_id: string | null
+    incumbent_person_id: string | null
+    incumbent: { full_name: string } | null
+    location: { id: string; name: string; status: string } | null
+  }
+  const slatedByCell = new Map<string, string[]>()
+  const moverDest = new Map<string, string>()
+  for (const s of (slotRes.data as unknown as S[]) ?? []) {
+    if (!s.position_id || !s.location || s.location.status !== 'opening') continue
+    if (!s.incumbent_person_id || !s.incumbent) continue
+    const k = key(s.location.id, s.position_id)
+    const arr = slatedByCell.get(k) ?? []
+    arr.push(s.incumbent.full_name)
+    slatedByCell.set(k, arr)
+    moverDest.set(s.incumbent_person_id, s.location.name)
+  }
+
+  const out: CompanyGap[] = []
+  for (const loc of locs) {
+    for (const r of required) {
+      const k = key(loc.id, r.position_id)
+      if (loc.status === 'opening') {
+        const slated = slatedByCell.get(k) ?? []
+        const gap = Math.max(0, r.required_count - slated.length)
+        if (gap > 0) {
+          out.push({
+            location_name: loc.name,
+            location_status: 'opening',
+            position_name: r.position_name,
+            level: r.level,
+            required: r.required_count,
+            projected: slated.length,
+            gap,
+            reason: 'new-site',
+            detail: slated.length ? `slated: ${slated.join(', ')}` : '',
+          })
+        }
+      } else {
+        const cur = curByCell.get(k) ?? []
+        const movers = cur.filter((p) => moverDest.has(p.id))
+        const projected = cur.length - movers.length
+        const gap = Math.max(0, r.required_count - projected)
+        if (gap > 0) {
+          out.push({
+            location_name: loc.name,
+            location_status: 'open',
+            position_name: r.position_name,
+            level: r.level,
+            required: r.required_count,
+            projected,
+            gap,
+            reason: movers.length > 0 ? 'backfill' : 'understaffed',
+            detail: movers.map((m) => `${m.name} → ${moverDest.get(m.id)}`).join(', '),
+          })
+        }
+      }
+    }
+  }
+
+  const order: Record<GapReason, number> = { 'new-site': 0, backfill: 1, understaffed: 2 }
+  return out.sort(
+    (a, b) =>
+      order[a.reason] - order[b.reason] ||
+      a.location_name.localeCompare(b.location_name) ||
+      (a.level ?? Infinity) - (b.level ?? Infinity),
+  )
+}
+
 export interface Fill {
   count: number
   names: string[]
@@ -147,6 +280,7 @@ export async function fetchFillForLocation(
        person:people_center_people ( full_name, status )`,
     )
     .eq('location_id', locationId)
+    .eq('is_primary', true)
     .is('ended_on', null)
   if (error) throw error
   type Row = {
@@ -154,7 +288,8 @@ export async function fetchFillForLocation(
     person: { full_name: string; status: string } | null
   }
   for (const r of (data as unknown as Row[]) ?? []) {
-    // Employed people only (active or on leave) count as filling a seat.
+    // A person's PRIMARY seat counts (matches the company-wide computation, so
+    // the two views never disagree). Employed people only (active/leave).
     if (r.person && (r.person.status === 'active' || r.person.status === 'leave')) {
       add(r.position_id, r.person.full_name)
     }

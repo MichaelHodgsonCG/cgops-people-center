@@ -132,13 +132,26 @@ op (employee names intentionally kept out of the repo).
      one base template, admin/executive-editable inline via "Required roster";
      seeded GM/Chef/AGM/Service/Beverage/Guest Service = 1, Sous = 2). Scope =
      management only (Michael's call). `gaps/GapView.tsx` + `gaps/api.ts`.
-   - **.docx export DONE (live):** "Download .docx" on the gap view generates a
-     Word report of the selected location (title, summary, role table, totals).
-     Uses the `docx` lib, dynamic-imported so it's a separate lazy chunk
-     (~355 kB, only loads on export). `gaps/docx.ts`.
-   - **Remaining:** per-concept required-count overrides (base template only
-     today); wire opening-date **urgency** into the gap view (dates already in
-     Upcoming); per-role hiring-lead-time backlog item.
+   - **Company-wide + backfill DONE (live):** the Gap Analysis view defaults to
+     "All locations (company-wide)" — every missing role across all locations
+     in one report, classified **new-site** (upcoming seat not yet slated),
+     **backfill** (an open site loses a leader slated to a new site — the origin
+     needs a replacement), or **understaffed** (open site already below the
+     roster). Summary chips + a Location/Role/Gap/Type/Detail table; the Detail
+     names the move for backfills. `fetchCompanyGaps()` in gaps/api.ts computes
+     projected = current − movers (a mover = someone in-seat at an open site who
+     is a succession incumbent at an opening site). Both the company and
+     single-location views count PRIMARY assignments so they never disagree.
+   - **.docx export DONE (live):** "Download .docx" exports the current view —
+     single-location or the full company-wide report — via the `docx` lib
+     (dynamic-imported lazy chunk). `gaps/docx.ts`.
+   - **Observed:** with the seeded roster, ~35 understaffed gaps across EXISTING
+     sites — many don't match the ideal roster (e.g. no Guest Service/Beverage
+     Mgr). Real, not a bug; Michael can trim the required roster or (later) set
+     per-concept counts.
+   - **Remaining:** per-concept required-count overrides; wire opening-date
+     **urgency** into the gap view (dates already in Upcoming); per-role
+     hiring-lead-time backlog item.
 
 ## Gotchas
 - Two auth identities: UI role by email vs DB `auth.uid()` (see Michael fix).
