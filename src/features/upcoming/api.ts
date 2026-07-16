@@ -1,73 +1,47 @@
-// Slated-incumbent (planned placement) data access for upcoming restaurants
-// (Phase 2, slice 2). Rows live in people_center_opening_placements, keyed to a
-// New Restaurant Center opening_site. RLS restricts all of this to
-// admin/executive, so the whole planning section is gated to those roles.
+// Upcoming-locations planning data (Phase 2). We do NOT store a separate plan:
+// the upcoming restaurants already exist in people_center_locations
+// (status='opening') and the Bench/succession model already plots slated
+// leaders into them. This reads those succession seats so the Upcoming view can
+// REFLECT the plan (read-only) next to the opening dates. Editing stays in the
+// Bench — one source of truth. Succession rows are admin/executive-only (RLS),
+// so non-privileged callers get an empty list.
 
 import { supabase } from '../../lib/supabase'
-import { recordAudit, type Actor } from '../../lib/activity'
 
-export interface OpeningPlacement {
+export interface UpcomingSeat {
   id: string
-  opening_site_id: string
-  position_id: string
-  person_id: string | null
-  note: string | null
-  position: { name: string; level: number | null } | null
-  person: { full_name: string } | null
+  location_name: string | null
+  position_name: string | null
+  position_level: number | null
+  incumbent_name: string | null
 }
 
-export async function fetchOpeningPlacements(): Promise<OpeningPlacement[]> {
+interface RawSeat {
+  id: string
+  positions: { name: string; level: number | null } | null
+  locations: { name: string; status: string | null } | null
+  incumbent: { full_name: string } | null
+}
+
+/** Succession seats at locations that are still opening (the upcoming sites).
+ * Same table + embeds the Bench uses, filtered to status='opening'. */
+export async function fetchUpcomingSeats(): Promise<UpcomingSeat[]> {
   const { data, error } = await supabase
-    .from('people_center_opening_placements')
+    .from('people_center_succession_slots')
     .select(
-      `id, opening_site_id, position_id, person_id, note,
-       position:people_center_positions ( name, level ),
-       person:people_center_people ( full_name )`,
+      `id, position_id, location_id,
+       positions:people_center_positions ( name, level ),
+       locations:people_center_locations ( name, status ),
+       incumbent:people_center_people!people_center_succession_slots_incumbent_person_id_fkey ( full_name )`,
     )
   if (error) throw error
-  return (data as unknown as OpeningPlacement[]) ?? []
-}
-
-/** Slate a person (or a gap, personId null) into a role at an upcoming site. */
-export async function addOpeningPlacement(
-  actor: Actor,
-  siteId: string,
-  siteName: string,
-  positionId: string,
-  positionName: string,
-  personId: string | null,
-  personName: string | null,
-): Promise<void> {
-  const { data, error } = await supabase
-    .from('people_center_opening_placements')
-    .insert({
-      opening_site_id: siteId,
-      position_id: positionId,
-      person_id: personId,
-      updated_by: actor.personId,
-      updated_by_name: actor.name,
-    })
-    .select('id')
-  if (error) throw error
-  await recordAudit(
-    actor,
-    'create',
-    'opening_placement',
-    (data?.[0]?.id as string) ?? null,
-    siteName,
-    `Slated ${personName ?? 'TBD'} → ${positionName} at ${siteName}`,
-  )
-}
-
-export async function removeOpeningPlacement(
-  actor: Actor,
-  id: string,
-  label: string,
-): Promise<void> {
-  const { error } = await supabase
-    .from('people_center_opening_placements')
-    .delete()
-    .eq('id', id)
-  if (error) throw error
-  await recordAudit(actor, 'delete', 'opening_placement', id, label, `Removed slated placement: ${label}`)
+  return ((data as unknown as RawSeat[]) ?? [])
+    .filter((r) => r.locations?.status === 'opening')
+    .map((r) => ({
+      id: r.id,
+      location_name: r.locations?.name ?? null,
+      position_name: r.positions?.name ?? null,
+      position_level: r.positions?.level ?? null,
+      incumbent_name: r.incumbent?.full_name ?? null,
+    }))
 }

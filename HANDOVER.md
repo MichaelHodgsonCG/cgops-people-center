@@ -94,18 +94,22 @@ op (employee names intentionally kept out of the repo).
      soft-opening / opening dates + a staffing-deadline countdown.
    - NRC tables = `opening_sites` (the sites, with `location_id` → CGOPS
      location + dates) and `opening_playbooks` / `opening_tasks` / templates.
-   - **Slice 2 DONE (live):** admins/executives slate who fills each upcoming
-     site's leadership roles, shown per site card (role — person, or "TBD (gap)").
-     New table `people_center_opening_placements` (opening_site_id + position_id
-     + nullable person_id), migration `20260716120000`, RLS admin/executive
-     (mirrors the succession tables). Did NOT reuse succession_slots — its
-     `location_id` hard-references `people_center_locations`, which the upcoming
-     sites don't have; keying to `opening_site_id` avoids materializing
-     locations early and keeps planning data out of the live Bench.
+   - **Slice 2 DONE (live) — reflects succession:** each Upcoming card shows the
+     upcoming site's **planned leadership from the Bench** (role — slated person,
+     or "not yet named"), read-only, admin/executive only. Editing stays in the
+     Bench — one source of truth.
+     - CORRECTION: upcoming sites **ARE** in `people_center_locations`
+       (`status='opening'`, `cgops_location_id` null — that null is why an
+       earlier check wrongly concluded they weren't there). The Bench/succession
+       model already plots leaders into them (Peterborough GM = Matthew Legault,
+       etc.). A first pass built a redundant `people_center_opening_placements`
+       table (migration 20260716120000); it was dropped (20260716123000, table
+       was empty) and the view now reads `people_center_succession_slots`,
+       matched to `opening_sites` by **name** (no id link — cgops_location_id is
+       null on the upcoming location rows).
    - **Slice 3 (next):** layer a future location's planned team onto the org
-     chart. NOTE: upcoming sites are NOT in `people_center_locations` yet
-     (`pc_location_id` null) — slice 3 must bring them in (or join by
-     `cgops_location_id`).
+     chart. The upcoming locations already exist in `people_center_locations`
+     (status='opening'), so the overlay can key off them directly.
    - **Backlog (Michael's ask):** per-role **hiring lead time** — edit how many
      days before opening each role should be hired (GM 90d, Chef de Cuisine 60d,
      …), so the staffing-deadline countdown becomes role-aware instead of just

@@ -1,28 +1,18 @@
-// Upcoming locations (Phase 2). Slice 1: a read-only projection of the New
-// Restaurant Center's `opening_sites` (planned restaurants + their handover /
-// soft-opening / opening dates + a staffing-deadline countdown). Slice 2:
-// admins/executives slate who will fill each upcoming site's leadership roles
-// (people_center_opening_placements) — planned leaders + gaps, shown per site.
-// The opening_sites read is open to any authenticated user; the planning
-// section is admin/executive-only (RLS + the canPlan gate below).
+// Upcoming locations (Phase 2). Slice 1: read-only projection of the New
+// Restaurant Center's `opening_sites` (planned restaurants + handover /
+// soft-opening / opening dates + a staffing-deadline countdown). Slice 2
+// (consolidated): reflect the EXISTING succession plan for each upcoming site —
+// the Bench/succession model already plots slated leaders into these locations
+// (they exist in people_center_locations with status='opening'), so we show
+// that here read-only rather than storing a second plan. Editing stays in the
+// Bench. opening_sites is readable by any authenticated user; the succession
+// reflection is admin/executive-only (RLS + the canPlan gate).
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import { CalendarClock, ExternalLink, Plus, Store, X } from 'lucide-react'
+import { CalendarClock, ExternalLink, Store } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import { actorFrom } from '../../lib/activity'
-import {
-  fetchManagerCandidates,
-  fetchReferenceOptions,
-  type ManagerCandidate,
-  type ReferenceOption,
-} from '../people/api'
-import {
-  addOpeningPlacement,
-  fetchOpeningPlacements,
-  removeOpeningPlacement,
-  type OpeningPlacement,
-} from './api'
+import { fetchUpcomingSeats, type UpcomingSeat } from './api'
 import type { UserProfile } from '../../types'
 
 interface OpeningSite {
@@ -72,30 +62,21 @@ const TONE_CLASS: Record<'danger' | 'warning' | 'info' | 'muted', string> = {
   muted: 'bg-surface-muted text-charcoal/50',
 }
 
+const norm = (s: string) => s.trim().toLowerCase()
+
 interface UpcomingViewProps {
   session: Session
   profile: UserProfile | null
 }
 
-export function UpcomingView({ session, profile }: UpcomingViewProps) {
-  const actor = actorFrom(profile, session)
-  // Planning section (slice 2) is admin/executive only, matching the RLS on
-  // people_center_opening_placements.
+export function UpcomingView({ session: _session, profile }: UpcomingViewProps) {
+  // The succession reflection is admin/executive only, matching succession RLS.
   const canPlan = profile?.role === 'admin' || profile?.role === 'executive'
 
   const [sites, setSites] = useState<OpeningSite[]>([])
+  const [seats, setSeats] = useState<UpcomingSeat[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-
-  // Slice-2 planning state.
-  const [placements, setPlacements] = useState<OpeningPlacement[]>([])
-  const [positions, setPositions] = useState<ReferenceOption[]>([])
-  const [people, setPeople] = useState<ManagerCandidate[]>([])
-  const [addingSiteId, setAddingSiteId] = useState<string | null>(null)
-  const [newPos, setNewPos] = useState('')
-  const [newPerson, setNewPerson] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [planErr, setPlanErr] = useState<string | null>(null)
 
   useEffect(() => {
     supabase
@@ -111,20 +92,10 @@ export function UpcomingView({ session, profile }: UpcomingViewProps) {
       })
   }, [])
 
-  const loadPlacements = useCallback(() => {
-    fetchOpeningPlacements().then(setPlacements).catch((e: Error) => setPlanErr(e.message))
-  }, [])
-
   useEffect(() => {
     if (!canPlan) return
-    loadPlacements()
-    fetchReferenceOptions()
-      .then((o) => setPositions(o.positions))
-      .catch((e: Error) => setPlanErr(e.message))
-    fetchManagerCandidates()
-      .then(setPeople)
-      .catch((e: Error) => setPlanErr(e.message))
-  }, [canPlan, loadPlacements])
+    fetchUpcomingSeats().then(setSeats).catch(() => setSeats([]))
+  }, [canPlan])
 
   const sorted = useMemo(() => {
     const key = (s: OpeningSite) => s.handover_date ?? s.opening_date ?? null
@@ -138,64 +109,27 @@ export function UpcomingView({ session, profile }: UpcomingViewProps) {
     })
   }, [sites])
 
-  // Placements grouped by site, each list ordered by role seniority (level).
-  const placementsBySite = useMemo(() => {
-    const map = new Map<string, OpeningPlacement[]>()
-    for (const p of placements) {
-      const arr = map.get(p.opening_site_id) ?? []
-      arr.push(p)
-      map.set(p.opening_site_id, arr)
+  // Succession seats grouped by location name (opening_sites carry no People
+  // Center location id — cgops_location_id is null — so we match on name), each
+  // list ordered by role seniority.
+  const seatsByName = useMemo(() => {
+    const map = new Map<string, UpcomingSeat[]>()
+    for (const seat of seats) {
+      if (!seat.location_name) continue
+      const k = norm(seat.location_name)
+      const arr = map.get(k) ?? []
+      arr.push(seat)
+      map.set(k, arr)
     }
     for (const arr of map.values()) {
       arr.sort(
         (a, b) =>
-          (a.position?.level ?? Infinity) - (b.position?.level ?? Infinity) ||
-          (a.position?.name ?? '').localeCompare(b.position?.name ?? ''),
+          (a.position_level ?? Infinity) - (b.position_level ?? Infinity) ||
+          (a.position_name ?? '').localeCompare(b.position_name ?? ''),
       )
     }
     return map
-  }, [placements])
-
-  const startAdd = useCallback((siteId: string) => {
-    setAddingSiteId(siteId)
-    setNewPos('')
-    setNewPerson('')
-    setPlanErr(null)
-  }, [])
-
-  async function saveAdd(site: OpeningSite) {
-    if (!newPos) return
-    setBusy(true)
-    setPlanErr(null)
-    try {
-      await addOpeningPlacement(
-        actor,
-        site.id,
-        site.name,
-        newPos,
-        positions.find((p) => p.id === newPos)?.name ?? 'role',
-        newPerson || null,
-        newPerson ? people.find((m) => m.id === newPerson)?.full_name ?? null : null,
-      )
-      setAddingSiteId(null)
-      loadPlacements()
-    } catch (e) {
-      setPlanErr(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function remove(pl: OpeningPlacement) {
-    const label = `${pl.position?.name ?? 'Role'} — ${pl.person?.full_name ?? 'TBD'}`
-    setPlanErr(null)
-    try {
-      await removeOpeningPlacement(actor, pl.id, label)
-      loadPlacements()
-    } catch (e) {
-      setPlanErr(e instanceof Error ? e.message : String(e))
-    }
-  }
+  }, [seats])
 
   if (loading) return <p className="p-6 text-sm text-charcoal/50">Loading upcoming locations…</p>
   if (error)
@@ -227,7 +161,7 @@ export function UpcomingView({ session, profile }: UpcomingViewProps) {
         <ul className="grid gap-3 sm:grid-cols-2">
           {sorted.map((s) => {
             const handover = countdown(daysUntil(s.handover_date))
-            const sitePlacements = placementsBySite.get(s.id) ?? []
+            const siteSeats = seatsByName.get(norm(s.name)) ?? []
             return (
               <li
                 key={s.id}
@@ -273,93 +207,32 @@ export function UpcomingView({ session, profile }: UpcomingViewProps) {
                   </a>
                 )}
 
-                {/* Slice 2: planned leadership (admin/executive only) */}
+                {/* Reflect the succession plan (admin/executive). Edit in Bench. */}
                 {canPlan && (
                   <div className="mt-3 border-t border-surface-line pt-3">
                     <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-charcoal/45">
-                      Planned leadership
+                      Planned leadership · from Bench
                     </p>
-                    <ul className="space-y-1">
-                      {sitePlacements.length === 0 && (
-                        <li className="text-xs text-charcoal/40">No one slated yet.</li>
-                      )}
-                      {sitePlacements.map((pl) => (
-                        <li
-                          key={pl.id}
-                          className="flex items-center justify-between gap-2 text-sm"
-                        >
-                          <span className="min-w-0 truncate">
+                    {siteSeats.length === 0 ? (
+                      <p className="text-xs text-charcoal/40">
+                        No seats planned yet — set them in Bench &amp; Risk.
+                      </p>
+                    ) : (
+                      <ul className="space-y-1">
+                        {siteSeats.map((seat) => (
+                          <li key={seat.id} className="min-w-0 truncate text-sm">
                             <span className="text-charcoal/60">
-                              {pl.position?.name ?? 'Role'}
+                              {seat.position_name ?? 'Role'}
                             </span>
                             {' — '}
-                            {pl.person ? (
-                              <span className="font-medium">{pl.person.full_name}</span>
+                            {seat.incumbent_name ? (
+                              <span className="font-medium">{seat.incumbent_name}</span>
                             ) : (
-                              <span className="italic text-warning">TBD (gap)</span>
+                              <span className="italic text-warning">not yet named</span>
                             )}
-                          </span>
-                          <button
-                            onClick={() => void remove(pl)}
-                            aria-label="Remove slated leader"
-                            className="shrink-0 rounded p-0.5 text-charcoal/30 hover:text-danger"
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-
-                    {addingSiteId === s.id ? (
-                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                        <select
-                          value={newPos}
-                          onChange={(e) => setNewPos(e.target.value)}
-                          className="rounded-md border border-surface-line bg-surface px-2 py-1 text-xs"
-                        >
-                          <option value="">— role —</option>
-                          {positions.map((p) => (
-                            <option key={p.id} value={p.id}>
-                              {p.name}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          value={newPerson}
-                          onChange={(e) => setNewPerson(e.target.value)}
-                          className="rounded-md border border-surface-line bg-surface px-2 py-1 text-xs"
-                        >
-                          <option value="">— TBD (gap) —</option>
-                          {people.map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.full_name}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          onClick={() => void saveAdd(s)}
-                          disabled={busy || !newPos}
-                          className="rounded-md bg-cg-orange px-2 py-1 text-xs font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
-                        >
-                          {busy ? 'Saving…' : 'Save'}
-                        </button>
-                        <button
-                          onClick={() => setAddingSiteId(null)}
-                          className="rounded-md border border-surface-line px-2 py-1 text-xs hover:bg-surface-muted"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => startAdd(s.id)}
-                        className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-cg-orange hover:underline"
-                      >
-                        <Plus className="h-3 w-3" /> Add slated leader
-                      </button>
-                    )}
-                    {planErr && addingSiteId === s.id && (
-                      <p className="mt-1 text-xs text-danger">{planErr}</p>
+                          </li>
+                        ))}
+                      </ul>
                     )}
                   </div>
                 )}
