@@ -22,8 +22,12 @@ Snapshot for continuing this work in a fresh session. Pair with `PROJECT-LOG.md`
   before schema changes.
 - **Git:** work has been developed on `claude/org-chart-manual-add-sync-a7rm1h`
   and merged to `main`. Start new work from `main`.
-- **Deploys are manual (Vercel).** DB/data changes are live immediately;
-  frontend changes need a Vercel deploy to appear.
+- **Deploys are automatic (Vercel).** The `cgops-people-center` Vercel project
+  (team `michael-hodgsons-projects`, owns `cg-people-center.vercel.app`) has git
+  auto-deploy on `main`: every push to `main` builds + goes to production
+  (usually READY in ~1–2 min). DB/data changes are live immediately. No manual
+  deploy step — a hard refresh clears stale cache. (Env vars live on the Vercel
+  project; don't use the file-tree `deploy_to_vercel`, it bypasses the git link.)
 - GitHub via the GitHub MCP (no `gh` CLI). Don't open PRs unless asked.
 
 ## Shipped so far (this arc)
