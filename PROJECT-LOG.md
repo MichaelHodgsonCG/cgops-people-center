@@ -1,5 +1,12 @@
 # Project Log
 
+## [2026-07-16] Cleaner mobile Directory (responsive card layout)
+**Shipped:**   Directory is now mobile-first. On phones the horizontal-scroll table becomes a stacked, tappable card list (name, position · location, kind/status/HQ badges, needs-review icon); filters (search, position, location, kind) go full-width. Desktop keeps the table at the sm+ breakpoint. Bulk-edit selection works on cards too (checkbox + orange highlight); tapping a card opens the cheat-sheet panel. Verified against the real built CSS bundle at 390px width via a Chromium screenshot. Frontend-only.
+**Roadmap:**   Backlog item "cleaner mobile Directory" -> done (live). Complements the mobile Visit view.
+**Decisions:** Made the existing Directory responsive rather than adding a separate field view — avoids duplicating the people list + filters + bulk logic (one source of truth). Cards use a clickable div (not a button) so the bulk checkbox isn't a nested interactive element.
+**Blockers:**  none
+**Next:**      Phase 2 scoping (upcoming-locations view + New Restaurant Center opening/turnover dates) or Phase 3 (gap-analysis Word report; needs required-count-per-role input).
+
 ## [2026-07-16] Directory bulk-edit status (prune roles) + mobile-directory backlog
 **Shipped:**   Directory now has an admin "Bulk edit" mode: filter by position/role → toggle Bulk edit → tick rows (or "select all filtered") → pick a status → Apply. Statuses offered: Departed (removes from directory + org chart — the prune mechanism), Leave, Active. Confirm dialog; fail-loud batch write (api bulkSetStatus, RLS admin/executive) with one audit row per batch; reversible (set Active again). This is the tool for pruning non-pipeline Supervisors (roadmap 3). Verified against the Push sync: roster-linked people are recognized as known duplicates and "not modified" on re-sync, and departed people are excluded from the manual-match pool — so a departed supervisor stays departed. Build passes.
 **Roadmap:**   Item 3 (prune non-emerging-leader Supervisors) -> tooling shipped (live); Michael applies the pruning in-UI. Added to backlog: cleaner mobile Directory page with better in-field filtering (complements the Visit view).

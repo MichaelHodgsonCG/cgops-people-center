@@ -283,7 +283,7 @@ export function DirectoryView({ session, profile, isAdmin }: DirectoryViewProps)
         <select
           value={locationFilter}
           onChange={(e) => setLocationFilter(e.target.value)}
-          className="rounded-md border border-surface-line bg-surface px-3 py-2 text-sm"
+          className="w-full rounded-md border border-surface-line bg-surface px-3 py-2 text-sm sm:w-auto"
         >
           <option value="">All locations</option>
           {locations.map((l) => (
@@ -295,7 +295,7 @@ export function DirectoryView({ session, profile, isAdmin }: DirectoryViewProps)
         <select
           value={kindFilter}
           onChange={(e) => setKindFilter(e.target.value)}
-          className="rounded-md border border-surface-line bg-surface px-3 py-2 text-sm"
+          className="w-full rounded-md border border-surface-line bg-surface px-3 py-2 text-sm sm:w-auto"
         >
           <option value="">All kinds</option>
           {Object.entries(KIND_LABELS).map(([k, label]) => (
@@ -409,7 +409,83 @@ export function DirectoryView({ session, profile, isAdmin }: DirectoryViewProps)
           )}
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-surface-line bg-surface">
+        <>
+          {/* Mobile: tappable cards for use in the field (desktop keeps the table) */}
+          <ul className="space-y-2 sm:hidden">
+            {sorted.length === 0 && (
+              <li className="rounded-xl border border-surface-line bg-surface p-6 text-center text-sm text-charcoal/50">
+                No people match these filters.
+              </li>
+            )}
+            {sorted.map((p) => {
+              const primary = currentPrimary(p)
+              const selected = bulkMode && selectedIds.has(p.id)
+              return (
+                <li key={p.id}>
+                  <div
+                    onClick={() => (bulkMode ? toggleSelect(p.id) : setSelectedId(p.id))}
+                    className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 ${
+                      selected
+                        ? 'border-cg-orange bg-cg-orange-soft/40'
+                        : 'border-surface-line bg-surface'
+                    }`}
+                  >
+                    {bulkMode && (
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${p.full_name}`}
+                        checked={selectedIds.has(p.id)}
+                        onChange={() => toggleSelect(p.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="mt-1 h-4 w-4 shrink-0"
+                      />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate font-medium">{p.full_name}</span>
+                        {p.data_quality_status === 'needs_review' && (
+                          <AlertTriangle
+                            className="h-3.5 w-3.5 shrink-0 text-warning"
+                            aria-label="Needs review"
+                          />
+                        )}
+                      </div>
+                      <div className="mt-0.5 text-sm text-charcoal/60">
+                        {primary?.positions?.name ?? '—'}
+                        {primary?.locations?.name ? ` · ${primary.locations.name}` : ''}
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                        <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[11px]">
+                          {KIND_LABELS[p.person_kind]}
+                        </span>
+                        {p.status === 'incoming' ? (
+                          <span className="rounded-full bg-info/10 px-2 py-0.5 text-[11px] font-medium text-info">
+                            Incoming{p.hire_date ? ` · ${p.hire_date}` : ''}
+                          </span>
+                        ) : p.status === 'candidate' ? (
+                          <span className="rounded-full bg-cg-orange-soft px-2 py-0.5 text-[11px] font-medium text-cg-orange">
+                            Candidate
+                          </span>
+                        ) : (
+                          <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[11px] capitalize text-charcoal/70">
+                            {p.status}
+                          </span>
+                        )}
+                        {p.off_roster && (
+                          <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[10px] font-medium text-charcoal/60">
+                            HQ
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+
+          {/* Desktop: table */}
+          <div className="hidden overflow-x-auto rounded-xl border border-surface-line bg-surface sm:block">
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="border-b border-surface-line text-xs uppercase tracking-wide text-charcoal/50">
@@ -500,7 +576,8 @@ export function DirectoryView({ session, profile, isAdmin }: DirectoryViewProps)
               })}
             </tbody>
           </table>
-        </div>
+          </div>
+        </>
       )}
 
       {selectedId && (

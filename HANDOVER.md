@@ -84,8 +84,9 @@ op (employee names intentionally kept out of the repo).
    non-pipeline Supervisors to `departed` to drop them from directory + chart.
    Durable across Push syncs (roster-linked people are "not modified" on
    re-sync). Michael applies the actual pruning.
-   NEW backlog item: **cleaner mobile Directory** — a mobile-first directory
-   page with better filtering for use in the field (complements the Visit view).
+   ~~**cleaner mobile Directory**~~ — DONE (live): the Directory is now
+   responsive — phones get a tappable card list + full-width filters, desktop
+   keeps the table (bulk edit works on both). Complements the Visit view.
 4. **Phase 2 — future org view:** upcoming/planned locations with a picker to
    layer them onto the org chart with slated incumbents. Pull **turnover /
    opening dates** from the **New Restaurant Center** (a CGOPS module in the
