@@ -1,5 +1,12 @@
 # Project Log
 
+## [2026-07-16] Phase 2 slice 1: Upcoming locations view (NRC opening dates)
+**Shipped:**   New "Upcoming" nav view (gated by org-chart permission) — a read-only projection of the New Restaurant Center's `opening_sites`. Lists planned restaurants with handover / soft-opening / opening dates, sorted soonest-first, each with a staffing-deadline countdown coloured by urgency (≤45d danger, ≤120d warning, else info; undated = muted). E.g. Beertown Peterborough "in 88 days", Richmond Hill "in 109 days". Reads `opening_sites` directly (its SELECT policy is `qual=true` for authenticated) — no sync, no new model. Verified against the real built CSS with the 5 live sites. AppShell nav + App routing wired; SuggestionsPanel context added.
+**Roadmap:**   Phase 2 slice 1 (future locations + staffing deadlines) -> done (live). Next: slice 2 slated incumbents (reuse people_center_succession_slots/candidates — the Bench model), slice 3 org-chart overlay.
+**Decisions:** Read `opening_sites` directly rather than syncing into people_center_locations — it's read-only display and the New Restaurant Center owns the data (ADR 0012 sync is for vocabulary People Center edits). Handover date = the headline staffing deadline. NRC tables mapped: opening_sites (+ opening_playbooks/tasks/templates).
+**Blockers:**  none. Note: upcoming sites are NOT in people_center_locations yet (pc_location_id null) — the slice-3 org-chart overlay must bring them in or join by cgops_location_id.
+**Next:**      Phase 2 slice 2 (slated incumbents per upcoming site) or Phase 3 (gap-analysis Word report; needs required-count-per-role).
+
 ## [2026-07-16] Cleaner mobile Directory (responsive card layout)
 **Shipped:**   Directory is now mobile-first. On phones the horizontal-scroll table becomes a stacked, tappable card list (name, position · location, kind/status/HQ badges, needs-review icon); filters (search, position, location, kind) go full-width. Desktop keeps the table at the sm+ breakpoint. Bulk-edit selection works on cards too (checkbox + orange highlight); tapping a card opens the cheat-sheet panel. Verified against the real built CSS bundle at 390px width via a Chromium screenshot. Frontend-only.
 **Roadmap:**   Backlog item "cleaner mobile Directory" -> done (live). Complements the mobile Visit view.

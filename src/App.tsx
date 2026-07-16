@@ -7,6 +7,7 @@ import { UsersView } from './features/admin/UsersView'
 import { DirectoryView } from './features/directory/DirectoryView'
 import { VisitView } from './features/visit/VisitView'
 import { OrgChartView } from './features/org/OrgChartView'
+import { UpcomingView } from './features/upcoming/UpcomingView'
 import { BenchView } from './features/bench/BenchView'
 import { can, toPermissionUser } from './permissions'
 
@@ -67,6 +68,8 @@ export default function App() {
         <VisitView session={session} profile={profile} />
       ) : effectiveView === 'org_chart' ? (
         <OrgChartView session={session} profile={profile} />
+      ) : effectiveView === 'upcoming' ? (
+        <UpcomingView session={session} profile={profile} />
       ) : effectiveView === 'bench' ? (
         <BenchView session={session} profile={profile} />
       ) : (

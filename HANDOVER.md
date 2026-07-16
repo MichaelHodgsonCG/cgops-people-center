@@ -87,11 +87,21 @@ op (employee names intentionally kept out of the repo).
    ~~**cleaner mobile Directory**~~ — DONE (live): the Directory is now
    responsive — phones get a tappable card list + full-width filters, desktop
    keeps the table (bulk edit works on both). Complements the Visit view.
-4. **Phase 2 — future org view:** upcoming/planned locations with a picker to
-   layer them onto the org chart with slated incumbents. Pull **turnover /
-   opening dates** from the **New Restaurant Center** (a CGOPS module in the
-   SAME DB — find its tables; likely tied to Shanna Jenion / construction &
-   development) to drive staffing deadlines.
+4. **Phase 2 — future org view** (in progress):
+   - **Slice 1 DONE (live):** "Upcoming" nav view — reads the New Restaurant
+     Center's `opening_sites` (CGOPS module, same DB; SELECT policy is open to
+     any authenticated user) and shows planned restaurants with handover /
+     soft-opening / opening dates + a staffing-deadline countdown.
+   - NRC tables = `opening_sites` (the sites, with `location_id` → CGOPS
+     location + dates) and `opening_playbooks` / `opening_tasks` / templates.
+   - Slated-incumbent model already exists: `people_center_succession_slots`
+     (position + location + incumbent) and `people_center_succession_candidates`
+     (ranked people) — the Bench view uses them. Reuse for the next slices.
+   - **Slice 2 (next):** assign slated incumbents to each upcoming site's key
+     roles. **Slice 3:** layer a future location's planned team onto the org
+     chart. NOTE: upcoming sites are NOT in `people_center_locations` yet
+     (`pc_location_id` null) — slice 3 must bring them in (or join by
+     `cgops_location_id`).
 5. **Phase 3 — gap analysis + deliverable:** compare current vs required org per
    (selected) location → **in-app report + downloadable Word (.docx)**,
    **management + key roles only**, showing planned moves, gaps, and urgency

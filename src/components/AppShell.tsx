@@ -16,6 +16,7 @@ import {
   Network,
   LogOut,
   ShieldAlert,
+  Store,
   UserCog,
   Users,
   type LucideIcon,
@@ -27,12 +28,20 @@ import { SuggestionsPanel } from '../features/suggestions/SuggestionsPanel'
 import { HelpPanel } from '../features/help/HelpPanel'
 import monogram from '../assets/CG Logo Small.png'
 
-export type View = 'directory' | 'visit' | 'org_chart' | 'bench' | 'data_sources' | 'users'
+export type View =
+  | 'directory'
+  | 'visit'
+  | 'org_chart'
+  | 'upcoming'
+  | 'bench'
+  | 'data_sources'
+  | 'users'
 
 const NAV: { view: View; label: string; resource: Resource; icon: LucideIcon }[] = [
   { view: 'directory', label: 'Directory', resource: 'directory', icon: Users },
   { view: 'visit', label: 'Visit', resource: 'directory', icon: MapPin },
   { view: 'org_chart', label: 'Org Chart', resource: 'org_chart', icon: Network },
+  { view: 'upcoming', label: 'Upcoming', resource: 'org_chart', icon: Store },
   { view: 'bench', label: 'Bench & Risk', resource: 'bench', icon: BarChart3 },
   { view: 'data_sources', label: 'Data Sources', resource: 'data_sources', icon: Database },
   { view: 'users', label: 'Users', resource: 'admin_area', icon: UserCog },
@@ -151,7 +160,7 @@ export function AppShell({
       {suggestionsOpen && (
         <SuggestionsPanel
           profile={profile}
-          pageContext={view === 'data_sources' ? 'Data Sources' : view === 'org_chart' ? 'Org Chart' : view === 'bench' ? 'Bench & Risk' : view === 'users' ? 'Users' : view === 'visit' ? 'Visit' : 'Directory'}
+          pageContext={view === 'data_sources' ? 'Data Sources' : view === 'org_chart' ? 'Org Chart' : view === 'upcoming' ? 'Upcoming' : view === 'bench' ? 'Bench & Risk' : view === 'users' ? 'Users' : view === 'visit' ? 'Visit' : 'Directory'}
           onClose={() => setSuggestionsOpen(false)}
         />
       )}
