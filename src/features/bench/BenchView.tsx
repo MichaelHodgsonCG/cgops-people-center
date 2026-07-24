@@ -16,6 +16,7 @@ import {
   deleteSlot,
   fetchConversationStaleness,
   fetchCoverageGrid,
+  fetchCoveredLocationIds,
   fetchPeopleOptions,
   fetchPeopleStats,
   fetchSlots,
@@ -47,10 +48,12 @@ interface BenchViewProps {
 
 export function BenchView({ session, profile }: BenchViewProps) {
   const actor = actorFrom(profile, session)
-  // Regional Ops Leaders read the full company bench but cannot edit here yet
-  // (Phase 2 is read-only for them; region-scoped ROL editing arrives in
-  // Phase 3). Executives/admins keep full edit.
-  const canEdit = profile?.role === 'admin' || profile?.role === 'executive'
+  // Editing is region-scoped: executives/admins edit any seat; a Regional Ops
+  // Leader edits only seats in the region(s) they lead (mirrors the RLS write
+  // policies gated by people_center_covers_location). Reads are company-wide.
+  const role = profile?.role
+  const isPrivileged = role === 'admin' || role === 'executive'
+  const [coveredIds, setCoveredIds] = useState<Set<string>>(new Set())
   const [slots, setSlots] = useState<SuccessionSlot[]>([])
   const [grid, setGrid] = useState<CoverageGrid | null>(null)
   const [staleness, setStaleness] = useState<ConversationStaleness | null>(null)
@@ -84,6 +87,29 @@ export function BenchView({ session, profile }: BenchViewProps) {
   useEffect(() => {
     load()
   }, [load])
+
+  // A ROL's covered locations (the ones they may edit). Executives/admins edit
+  // everything, so we only need this for regional_leader.
+  useEffect(() => {
+    if (role === 'regional_leader' && profile?.person_id) {
+      fetchCoveredLocationIds(profile.person_id)
+        .then((ids) => setCoveredIds(new Set(ids)))
+        .catch((e: Error) => setError(e.message))
+    }
+  }, [role, profile?.person_id])
+
+  const canEditSlot = useCallback(
+    (slot: SuccessionSlot) =>
+      isPrivileged ||
+      (role === 'regional_leader' && !!slot.location_id && coveredIds.has(slot.location_id)),
+    [isPrivileged, role, coveredIds],
+  )
+  const canCreate = isPrivileged || (role === 'regional_leader' && coveredIds.size > 0)
+  // "Plan a seat" only offers locations the user may actually write to.
+  const formOptions = useMemo(() => {
+    if (!options || isPrivileged) return options
+    return { ...options, locations: options.locations.filter((l) => coveredIds.has(l.id)) }
+  }, [options, isPrivileged, coveredIds])
 
   // Seat incumbents by location × position: an upcoming location's
   // already-hired GM/Chef shows as "(incoming)" until Push assigns them.
@@ -202,13 +228,15 @@ export function BenchView({ session, profile }: BenchViewProps) {
         <p className="mb-4 text-xs text-charcoal/50">
           One seat per key position per location or region. Coverage is
           computed from ranked successors.
-          {canEdit
+          {isPrivileged
             ? ' Editable by executives and admins.'
-            : ' Read-only view — editing region seats arrives soon.'}
+            : role === 'regional_leader'
+              ? ' You can edit seats for locations in your region; the rest is read-only.'
+              : ' Read-only view.'}
         </p>
-        {canEdit && (
+        {canCreate && (
           <NewSlotForm
-            options={options}
+            options={formOptions}
             people={people}
             onCreate={async (positionId, locationId, incumbentId, label) => {
               await createSlot(actor, positionId, locationId, null, incumbentId, label)
@@ -227,7 +255,7 @@ export function BenchView({ session, profile }: BenchViewProps) {
                 key={s.id}
                 slot={s}
                 people={people}
-                canEdit={canEdit}
+                canEdit={canEditSlot(s)}
                 onSetIncumbent={async (personId) => {
                   await setSlotIncumbent(actor, s.id, personId, slotLabel(s))
                   load()
