@@ -74,6 +74,12 @@ export function can(
     case 'restricted_notes':
       return action === 'view' && user.role === 'executive'
     case 'bench':
+      // View: executive altitude + Regional Ops Leaders. ROLs read the whole
+      // company's bench/gap picture (succession moves cross regions; ROLs audit
+      // outside their own region) — scoped-regional-leader Phase 2. Bench
+      // EDITING stays executive/admin here; region-scoped ROL writes land in
+      // Phase 3, gated per-seat by people_center_covers_location, not via can().
+      if (action === 'view') return ['executive', 'regional_leader'].includes(user.role)
       return user.role === 'executive'
     case 'person':
       // HQ profile editing (20260704160000) + incoming-hire creation
