@@ -30,6 +30,7 @@ export type Resource =
   | 'own_fun_facts' // self-service fun facts on your own profile (20260706090000)
   | 'relationship_notes' // the cheat sheet's relationship half (audited read)
   | 'restricted_notes' // restricted-visibility notes (audited read)
+  | 'user_scopes' // Covered-locations picker: manage bespoke coverage grants (HQ)
 
 export interface PermissionUser {
   role: AppRole
@@ -73,6 +74,10 @@ export function can(
     case 'relationship_notes':
     case 'restricted_notes':
       return action === 'view' && user.role === 'executive'
+    case 'user_scopes':
+      // Covered-locations picker — HQ altitude only (mirrors the widened
+      // people_center_user_scopes RLS: admin + executive manage grants).
+      return user.role === 'executive'
     case 'bench':
       // View: executive altitude + Regional Ops Leaders. ROLs read the whole
       // company's bench/gap picture (succession moves cross regions; ROLs audit
