@@ -1,5 +1,12 @@
 # Project Log
 
+## [2026-07-24] Multi-seat follow-ups: Excel import + Bench grid
+**Shipped:** Closed the two multi-seat gaps left by the previous entry. (1) Excel import (gaps/api.ts): fetchSlotIndex now returns a LIST of seats per (location, role) with each seat's incumbent; applyAssignments fills VACANT seats first and creates new ones as needed, never overwriting a seat already held by someone else — so importing 3 Sous for one site lands on 3 separate seats instead of clobbering one. Idempotent (a person already slated for the role is a no-op). (2) Bench coverage grid (BenchView): incomingByCell now collects ALL incumbent names per cell (de-duped) and the pipeline cell renders every "(incoming)" name, not just the last one. Also routed the import's error text through the shared errText. Build passes.
+**Roadmap:** Multi-seat succession (3 Sous, etc.) is now consistent across the Bench list, gap counts, Bench grid, and the Excel round-trip.
+**Decisions:** Import fills vacant-before-create and never overwrites an occupied seat (safe re-import); over-filling beyond the required count just creates extra seats (visible in the gap view), not an error.
+**Blockers:** none.
+**Next:** —
+
 ## [2026-07-24] Multiple seats per role per location + real Bench errors
 **Shipped:** Two fixes from a Bench failure. (1) A location can now have MULTIPLE succession seats for the same role — e.g. Beertown Peterborough requires 3 Sous Chefs. Migration 20260724160000 drops the one-seat-per-role unique index (people_center_succession_slots_unique_seat); the required roster already carries per-role counts and gap views already accumulate multiple incumbents. Verified: a 2nd Sous seat at Peterborough now inserts (was a unique_violation). (2) Bench errors rendered as "[object Object]" — PostgREST errors are plain objects, so `String(err)` printed junk and hid the real cause (the unique violation above). New shared src/lib/errText.ts (promoted from DataSourcesView's local helper) reads .message/.details/.hint off the object; wired through BenchView's catches. Build passes.
 **Roadmap:** Unblocks planning real rosters where a role repeats (Sous ×3, etc.). The incoming-hire union (prior entry) already let assignments show; this lets the Bench/succession path plan multiples too.

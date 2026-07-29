@@ -113,12 +113,17 @@ export function BenchView({ session, profile }: BenchViewProps) {
   }, [options, isPrivileged, coveredIds])
 
   // Seat incumbents by location × position: an upcoming location's
-  // already-hired GM/Chef shows as "(incoming)" until Push assigns them.
+  // already-hired GM/Chef shows as "(incoming)" until Push assigns them. A
+  // location can have several seats for the same role (e.g. 3 Sous), so this
+  // collects ALL incumbent names per cell, de-duped.
   const incomingByCell = useMemo(() => {
-    const map = new Map<string, string>()
+    const map = new Map<string, string[]>()
     for (const s of slots) {
       if (s.location_id && s.positions?.name && s.incumbent?.full_name) {
-        map.set(`${s.location_id}|${s.positions.name}`, s.incumbent.full_name)
+        const k = `${s.location_id}|${s.positions.name}`
+        const arr = map.get(k) ?? []
+        if (!arr.includes(s.incumbent.full_name)) arr.push(s.incumbent.full_name)
+        map.set(k, arr)
       }
     }
     return map
@@ -320,7 +325,7 @@ function PipelineTable({
   group: 'foh' | 'boh'
   positions: PositionColumn[]
   grid: CoverageGrid
-  incomingByCell: Map<string, string>
+  incomingByCell: Map<string, string[]>
   successorsByLocation: Map<string, string[]>
 }) {
   if (positions.length === 0) return null
@@ -352,20 +357,26 @@ function PipelineTable({
                 {positions.map((p) => {
                   const key = `${l.id}|${p.name}`
                   const names = grid.occupants[key] ?? []
-                  const incoming = incomingByCell.get(key)
+                  // Incoming incumbents not already sitting in the seat today.
+                  const incoming = (incomingByCell.get(key) ?? []).filter(
+                    (n) => !names.includes(n) && !names.includes(`${n} (incoming)`),
+                  )
                   return (
                     <td key={p.id} className="px-3 py-2 text-charcoal/80">
                       {names.length > 0 ? (
                         <>
                           {names.join(', ')}
-                          {incoming &&
-                            !names.includes(incoming) &&
-                            !names.includes(`${incoming} (incoming)`) && (
-                              <span className="text-info"> · {incoming} (incoming)</span>
-                            )}
+                          {incoming.length > 0 && (
+                            <span className="text-info">
+                              {' · '}
+                              {incoming.map((n) => `${n} (incoming)`).join(', ')}
+                            </span>
+                          )}
                         </>
-                      ) : incoming ? (
-                        <span className="text-info">{incoming} (incoming)</span>
+                      ) : incoming.length > 0 ? (
+                        <span className="text-info">
+                          {incoming.map((n) => `${n} (incoming)`).join(', ')}
+                        </span>
                       ) : p.isKey ? (
                         <Missing />
                       ) : (

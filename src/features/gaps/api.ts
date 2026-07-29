@@ -6,6 +6,7 @@
 
 import { supabase } from '../../lib/supabase'
 import { recordAudit, type Actor } from '../../lib/activity'
+import { errText } from '../../lib/errText'
 import { addPerson } from '../people/api'
 import { createSlot, setSlotIncumbent } from '../bench/api'
 import type { ResolvedAssignment } from './importXlsx'
@@ -352,18 +353,33 @@ export async function fetchFillForLocation(
 
 // --- Excel round-trip: apply filled-in assignments as slated leaders ---------
 
-/** Existing succession seats keyed `${locationId}|${positionId}` → slot id, so
- * an import updates the seat's incumbent instead of colliding with the
- * one-seat-per-role unique index. */
-export async function fetchSlotIndex(): Promise<Map<string, string>> {
+export interface SeatRef {
+  id: string
+  incumbentPersonId: string | null
+}
+
+/** Existing succession seats grouped by `${locationId}|${positionId}` → a LIST
+ * (a location can have several seats for the same role, e.g. 3 Sous). On import
+ * we fill VACANT seats first and create new ones as needed, never overwriting a
+ * seat already held by someone else. */
+export async function fetchSlotIndex(): Promise<Map<string, SeatRef[]>> {
   const { data, error } = await supabase
     .from('people_center_succession_slots')
-    .select('id, position_id, location_id')
+    .select('id, position_id, location_id, incumbent_person_id')
   if (error) throw error
-  type Row = { id: string; position_id: string; location_id: string | null }
-  const m = new Map<string, string>()
+  type Row = {
+    id: string
+    position_id: string
+    location_id: string | null
+    incumbent_person_id: string | null
+  }
+  const m = new Map<string, SeatRef[]>()
   for (const s of (data as unknown as Row[]) ?? []) {
-    if (s.location_id) m.set(`${s.location_id}|${s.position_id}`, s.id)
+    if (!s.location_id) continue
+    const k = `${s.location_id}|${s.position_id}`
+    const arr = m.get(k) ?? []
+    arr.push({ id: s.id, incumbentPersonId: s.incumbent_person_id })
+    m.set(k, arr)
   }
   return m
 }
@@ -391,9 +407,15 @@ export interface ApplyResult {
 export async function applyAssignments(
   actor: Actor,
   items: ResolvedAssignment[],
-  slotIndex: Map<string, string>,
+  slotIndex: Map<string, SeatRef[]>,
 ): Promise<ApplyResult> {
   const res: ApplyResult = { created: 0, linked: 0, slotsSet: 0, errors: [] }
+  // Mutable working copy: consume vacant seats and append newly-created ones so
+  // several people for the same role land on SEPARATE seats (3 Sous → 3 seats)
+  // instead of overwriting one.
+  const seatsByKey = new Map<string, SeatRef[]>()
+  for (const [k, v] of slotIndex) seatsByKey.set(k, v.map((s) => ({ ...s })))
+
   for (const it of items) {
     if (it.action === 'error' || !it.locationId || !it.positionId) continue
     try {
@@ -417,14 +439,26 @@ export async function applyAssignments(
         res.linked++
       }
       const label = `${it.roleName} — ${it.locationName}`
-      const existing = slotIndex.get(`${it.locationId}|${it.positionId}`)
-      if (existing) await setSlotIncumbent(actor, existing, personId, label)
-      else await createSlot(actor, it.positionId, it.locationId, null, personId, label)
+      const k = `${it.locationId}|${it.positionId}`
+      const seats = seatsByKey.get(k) ?? []
+      // Already slated into a seat for this role → nothing to change.
+      if (seats.some((s) => s.incumbentPersonId === personId)) {
+        res.slotsSet++
+        continue
+      }
+      // Fill the first vacant seat; otherwise create a new one.
+      const vacant = seats.find((s) => s.incumbentPersonId === null)
+      if (vacant) {
+        await setSlotIncumbent(actor, vacant.id, personId, label)
+        vacant.incumbentPersonId = personId
+      } else {
+        await createSlot(actor, it.positionId, it.locationId, null, personId, label)
+        seats.push({ id: `new:${personId}`, incumbentPersonId: personId })
+        seatsByKey.set(k, seats)
+      }
       res.slotsSet++
     } catch (e) {
-      res.errors.push(
-        `${it.personName} → ${it.roleName} @ ${it.locationName}: ${e instanceof Error ? e.message : String(e)}`,
-      )
+      res.errors.push(`${it.personName} → ${it.roleName} @ ${it.locationName}: ${errText(e)}`)
     }
   }
   return res
