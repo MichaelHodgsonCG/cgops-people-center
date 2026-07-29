@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import type { Session } from '@supabase/supabase-js'
 import { AlertTriangle, Plus, Trash2, Users } from 'lucide-react'
 import { actorFrom } from '../../lib/activity'
+import { errText } from '../../lib/errText'
 import { fetchReferenceOptions, type ReferenceOption } from '../people/api'
 import type { UserProfile } from '../../types'
 import {
@@ -80,7 +81,7 @@ export function BenchView({ session, profile }: BenchViewProps) {
         setPeople(po)
         setOptions(refs)
       })
-      .catch((e: Error) => setError(e.message))
+      .catch((e) => setError(errText(e)))
       .finally(() => setLoading(false))
   }, [])
 
@@ -94,7 +95,7 @@ export function BenchView({ session, profile }: BenchViewProps) {
     if (role === 'regional_leader' && profile?.person_id) {
       fetchCoveredLocationIds(profile.person_id)
         .then((ids) => setCoveredIds(new Set(ids)))
-        .catch((e: Error) => setError(e.message))
+        .catch((e) => setError(errText(e)))
     }
   }, [role, profile?.person_id])
 
@@ -462,7 +463,7 @@ function NewSlotForm({
       setLocationId('')
       setIncumbentId('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(errText(err))
     } finally {
       setSaving(false)
     }
@@ -542,8 +543,8 @@ function SlotCard({
               value={slot.incumbent_person_id ?? ''}
               onChange={(e) => {
                 setEditingIncumbent(false)
-                onSetIncumbent(e.target.value || null).catch((err: Error) =>
-                  setError(err.message),
+                onSetIncumbent(e.target.value || null).catch((err) =>
+                  setError(errText(err)),
                 )
               }}
               onBlur={() => setEditingIncumbent(false)}
@@ -587,7 +588,7 @@ function SlotCard({
               {c.people?.full_name ?? c.person_id}
               {canEdit && (
                 <button
-                  onClick={() => onRemoveCandidate(c.id).catch((e: Error) => setError(e.message))}
+                  onClick={() => onRemoveCandidate(c.id).catch((e) => setError(errText(e)))}
                   aria-label="Remove candidate"
                   className="rounded p-0.5 text-charcoal/30 hover:text-danger"
                 >
@@ -614,7 +615,7 @@ function SlotCard({
             onClick={() =>
               onAddCandidate(candidateId, nextRank)
                 .then(() => setCandidateId(''))
-                .catch((e: Error) => setError(e.message))
+                .catch((e) => setError(errText(e)))
             }
             className="rounded-md border border-surface-line px-2 py-1 text-xs hover:bg-surface-muted disabled:opacity-40"
           >
