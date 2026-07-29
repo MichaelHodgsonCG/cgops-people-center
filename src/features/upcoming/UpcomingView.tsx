@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { CalendarClock, ExternalLink, Network, Store } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import { fetchUpcomingSeats, type UpcomingSeat } from './api'
+import { fetchIncomingSeats, fetchUpcomingSeats, type UpcomingSeat } from './api'
 import { PlannedOrgPanel } from './PlannedOrgPanel'
 import type { UserProfile } from '../../types'
 
@@ -96,7 +96,21 @@ export function UpcomingView({ session: _session, profile }: UpcomingViewProps) 
 
   useEffect(() => {
     if (!canPlan) return
-    fetchUpcomingSeats().then(setSeats).catch(() => setSeats([]))
+    // Upcoming roster = slated leaders (succession) ∪ incoming external hires
+    // assigned to the site. Merge per (location, position): a succession seat
+    // wins unless it's unnamed and an incoming hire actually fills that seat.
+    Promise.all([fetchUpcomingSeats(), fetchIncomingSeats()])
+      .then(([slated, incoming]) => {
+        const byKey = new Map<string, UpcomingSeat>()
+        const k = (s: UpcomingSeat) => `${norm(s.location_name ?? '')}|${s.position_id ?? ''}`
+        for (const s of slated) byKey.set(k(s), s)
+        for (const s of incoming) {
+          const existing = byKey.get(k(s))
+          if (!existing || !existing.incumbent_name) byKey.set(k(s), s)
+        }
+        setSeats([...byKey.values()])
+      })
+      .catch(() => setSeats([]))
   }, [canPlan])
 
   const sorted = useMemo(() => {

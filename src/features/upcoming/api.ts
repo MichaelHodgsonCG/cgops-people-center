@@ -52,6 +52,50 @@ export async function fetchUpcomingSeats(): Promise<UpcomingSeat[]> {
     }))
 }
 
+/** Incoming/active external hires assigned to an opening site. The "add
+ * incoming hire" flow places them via a PRIMARY position assignment (not a
+ * succession seat), so they must be unioned into the upcoming roster or they'd
+ * be invisible there. Same UpcomingSeat shape; id prefixed "asg:" to avoid
+ * colliding with succession slot ids. */
+export async function fetchIncomingSeats(): Promise<UpcomingSeat[]> {
+  const { data, error } = await supabase
+    .from('people_center_position_assignments')
+    .select(
+      `id, position_id, ended_on,
+       positions:people_center_positions ( name, level ),
+       locations:people_center_locations ( name, status ),
+       person:people_center_people ( id, full_name, status )`,
+    )
+    .eq('is_primary', true)
+    .is('ended_on', null)
+  if (error) throw error
+  type Row = {
+    id: string
+    position_id: string | null
+    positions: { name: string; level: number | null } | null
+    locations: { name: string; status: string | null } | null
+    person: { id: string; full_name: string; status: string } | null
+  }
+  return ((data as unknown as Row[]) ?? [])
+    .filter(
+      (r) =>
+        r.locations?.status === 'opening' &&
+        !!r.person &&
+        (r.person.status === 'incoming' ||
+          r.person.status === 'active' ||
+          r.person.status === 'leave'),
+    )
+    .map((r) => ({
+      id: `asg:${r.id}`,
+      location_name: r.locations?.name ?? null,
+      position_id: r.position_id,
+      position_name: r.positions?.name ?? null,
+      position_level: r.positions?.level ?? null,
+      incumbent_person_id: r.person!.id,
+      incumbent_name: r.person!.full_name,
+    }))
+}
+
 export interface TemplatePosition {
   id: string
   name: string
