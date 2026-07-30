@@ -12,48 +12,99 @@ import { createSlot, setSlotIncumbent } from '../bench/api'
 import type { ResolvedAssignment } from './importXlsx'
 
 export interface RoleRequirement {
+  id: string
   position_id: string
   position_name: string
   level: number | null
   required_count: number
+  location_id: string | null // null = global default; else a per-location override
 }
 
 interface RawReq {
+  id: string
   position_id: string
   required_count: number
+  location_id: string | null
   positions: { name: string; level: number | null } | null
 }
 
+/** ALL single-role requirement rows — global defaults (location_id null) and
+ * per-location overrides. Callers resolve the effective set per location with
+ * resolveSingleRequirements(). */
 export async function fetchRoleRequirements(): Promise<RoleRequirement[]> {
   const { data, error } = await supabase
     .from('people_center_role_requirements')
-    .select('position_id, required_count, positions:people_center_positions ( name, level )')
+    .select('id, position_id, required_count, location_id, positions:people_center_positions ( name, level )')
   if (error) throw error
   return ((data as unknown as RawReq[]) ?? [])
     .map((r) => ({
+      id: r.id,
       position_id: r.position_id,
       required_count: r.required_count,
+      location_id: r.location_id,
       position_name: r.positions?.name ?? '?',
       level: r.positions?.level ?? null,
     }))
     .sort((a, b) => (a.level ?? Infinity) - (b.level ?? Infinity))
 }
 
+/** Set a required count. locationId null writes the global default; a location
+ * id writes (or updates) that location's override for the role. */
 export async function setRoleRequirement(
   actor: Actor,
   positionId: string,
   positionName: string,
   count: number,
+  locationId: string | null = null,
 ): Promise<void> {
-  const { error } = await supabase.from('people_center_role_requirements').upsert(
-    {
+  const sel = supabase
+    .from('people_center_role_requirements')
+    .select('id')
+    .eq('position_id', positionId)
+    .limit(1)
+  const { data: existing, error: selErr } = await (locationId === null
+    ? sel.is('location_id', null)
+    : sel.eq('location_id', locationId))
+  if (selErr) throw selErr
+  if (existing && existing.length > 0) {
+    const { error } = await supabase
+      .from('people_center_role_requirements')
+      .update({ required_count: count, updated_by: actor.personId, updated_by_name: actor.name })
+      .eq('id', (existing[0] as { id: string }).id)
+    if (error) throw error
+  } else {
+    const { error } = await supabase.from('people_center_role_requirements').insert({
       position_id: positionId,
       required_count: count,
+      location_id: locationId,
       updated_by: actor.personId,
       updated_by_name: actor.name,
-    },
-    { onConflict: 'position_id' },
+    })
+    if (error) throw error
+  }
+  await recordAudit(
+    actor,
+    'update',
+    'role_requirement',
+    positionId,
+    positionName,
+    `Required count for ${positionName}${locationId ? ' (location override)' : ''} set to ${count}`,
   )
+}
+
+/** Remove a location's override for a role, so it falls back to the global
+ * default again. */
+export async function clearRoleRequirement(
+  actor: Actor,
+  positionId: string,
+  positionName: string,
+  locationId: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from('people_center_role_requirements')
+    .delete()
+    .eq('position_id', positionId)
+    .eq('location_id', locationId)
   if (error) throw error
   await recordAudit(
     actor,
@@ -61,7 +112,7 @@ export async function setRoleRequirement(
     'role_requirement',
     positionId,
     positionName,
-    `Required count for ${positionName} set to ${count}`,
+    `Location override for ${positionName} removed (back to global)`,
   )
 }
 
@@ -99,14 +150,18 @@ export interface RequirementGroup {
   id: string
   name: string
   total_min: number
+  location_id: string | null // null = global default; else a per-location pool
+  overrides_group_id: string | null // set when a location pool replaces a global one
   roles: GroupRole[]
 }
 
+/** ALL pools — global (location_id null) and per-location. Callers resolve the
+ * effective set per location with resolveGroupRequirements(). */
 export async function fetchRequirementGroups(): Promise<RequirementGroup[]> {
   const { data, error } = await supabase
     .from('people_center_requirement_groups')
     .select(
-      `id, name, total_min, sort_order,
+      `id, name, total_min, sort_order, location_id, overrides_group_id,
        roles:people_center_requirement_group_roles (
          position_id, min_count, positions:people_center_positions ( name, level ) )`,
     )
@@ -117,6 +172,8 @@ export async function fetchRequirementGroups(): Promise<RequirementGroup[]> {
     name: string
     total_min: number
     sort_order: number
+    location_id: string | null
+    overrides_group_id: string | null
     roles: {
       position_id: string
       min_count: number
@@ -127,6 +184,8 @@ export async function fetchRequirementGroups(): Promise<RequirementGroup[]> {
     id: g.id,
     name: g.name,
     total_min: g.total_min,
+    location_id: g.location_id,
+    overrides_group_id: g.overrides_group_id,
     roles: (g.roles ?? [])
       .map((r) => ({
         position_id: r.position_id,
@@ -140,10 +199,18 @@ export async function fetchRequirementGroups(): Promise<RequirementGroup[]> {
 
 export async function saveRequirementGroup(
   actor: Actor,
-  group: { id?: string; name: string; total_min: number; roles: { position_id: string; min_count: number }[] },
+  group: {
+    id?: string
+    name: string
+    total_min: number
+    roles: { position_id: string; min_count: number }[]
+    location_id?: string | null
+    overrides_group_id?: string | null
+  },
 ): Promise<void> {
   let groupId = group.id
   if (groupId) {
+    // Edit keeps the pool's scope (location_id / overrides_group_id) as-is.
     const { error } = await supabase
       .from('people_center_requirement_groups')
       .update({ name: group.name, total_min: group.total_min, updated_by: actor.personId, updated_by_name: actor.name })
@@ -152,7 +219,14 @@ export async function saveRequirementGroup(
   } else {
     const { data, error } = await supabase
       .from('people_center_requirement_groups')
-      .insert({ name: group.name, total_min: group.total_min, updated_by: actor.personId, updated_by_name: actor.name })
+      .insert({
+        name: group.name,
+        total_min: group.total_min,
+        location_id: group.location_id ?? null,
+        overrides_group_id: group.overrides_group_id ?? null,
+        updated_by: actor.personId,
+        updated_by_name: actor.name,
+      })
       .select('id')
     if (error) throw error
     groupId = data![0].id as string
@@ -173,6 +247,39 @@ export async function deleteRequirementGroup(actor: Actor, id: string, name: str
   const { error } = await supabase.from('people_center_requirement_groups').delete().eq('id', id)
   if (error) throw error
   await recordAudit(actor, 'delete', 'requirement_group', id, name, `Deleted group "${name}"`)
+}
+
+// --- Per-location resolution: global default + overrides, most-specific wins --
+
+/** Effective single-role requirements at a location: the global row for each
+ * position, replaced by this location's override where one exists. Pass a null
+ * locationId to get the global defaults alone. */
+export function resolveSingleRequirements(
+  all: RoleRequirement[],
+  locationId: string | null,
+): RoleRequirement[] {
+  const byPos = new Map<string, RoleRequirement>()
+  for (const r of all) if (r.location_id === null) byPos.set(r.position_id, r)
+  if (locationId !== null) {
+    for (const r of all) if (r.location_id === locationId) byPos.set(r.position_id, r)
+  }
+  return [...byPos.values()].sort((a, b) => (a.level ?? Infinity) - (b.level ?? Infinity))
+}
+
+/** Effective pools at a location: global pools that this location hasn't
+ * overridden, plus this location's own pools (overrides + location-only adds).
+ * Pass a null locationId to get the global pools alone. */
+export function resolveGroupRequirements(
+  all: RequirementGroup[],
+  locationId: string | null,
+): RequirementGroup[] {
+  if (locationId === null) return all.filter((g) => g.location_id === null)
+  const locGroups = all.filter((g) => g.location_id === locationId)
+  const overridden = new Set(
+    locGroups.map((g) => g.overrides_group_id).filter((x): x is string => x !== null),
+  )
+  const globals = all.filter((g) => g.location_id === null && !overridden.has(g.id))
+  return [...globals, ...locGroups]
 }
 
 /** Gap for one pooled group given how many of each role are filled:
@@ -266,13 +373,6 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
   if (assignRes.error) throw assignRes.error
   if (slotRes.error) throw slotRes.error
 
-  // A position governed by a group is NOT also counted as a single role (the
-  // group owns it), so we don't double-count.
-  const groupMemberPositions = new Set<string>()
-  for (const g of groups) for (const r of g.roles) groupMemberPositions.add(r.position_id)
-  const required = reqs.filter(
-    (r) => r.required_count > 0 && !groupMemberPositions.has(r.position_id),
-  )
   const key = (locId: string, posId: string) => `${locId}|${posId}`
 
   // Current seats at OPEN locations, and everyone's origin (person → their seat).
@@ -340,6 +440,16 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
 
   const out: CompanyGap[] = []
   for (const loc of locs) {
+    // Effective roster for THIS location: global defaults overlaid with the
+    // location's own overrides (most-specific wins). A role owned by a pool is
+    // not also counted as a single role, so we don't double-count.
+    const locGroups = resolveGroupRequirements(groups, loc.id)
+    const memberPos = new Set<string>()
+    for (const g of locGroups) for (const r of g.roles) memberPos.add(r.position_id)
+    const required = resolveSingleRequirements(reqs, loc.id).filter(
+      (r) => r.required_count > 0 && !memberPos.has(r.position_id),
+    )
+
     for (const r of required) {
       const k = key(loc.id, r.position_id)
       if (loc.status === 'opening') {
@@ -391,7 +501,7 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
     }
 
     // Pooled group requirements for this location.
-    for (const g of groups) {
+    for (const g of locGroups) {
       if (g.roles.length === 0) continue
       const filledByPos = new Map<string, number>()
       for (const gr of g.roles) filledByPos.set(gr.position_id, projectedFill(loc, gr.position_id))

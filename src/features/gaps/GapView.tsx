@@ -30,6 +30,9 @@ import {
   fetchRequirementGroups,
   fetchRoleRequirements,
   groupGap,
+  resolveGroupRequirements,
+  resolveSingleRequirements,
+  clearRoleRequirement,
   saveRequirementGroup,
   setRoleRequirement,
   type CompanyGap,
@@ -156,27 +159,32 @@ export function GapView({ session, profile }: GapViewProps) {
     })
   }
 
+  // The effective roster for the selected location: global defaults overlaid
+  // with this location's overrides (most-specific wins).
+  const effSingles = useMemo(() => resolveSingleRequirements(reqs, single), [reqs, single])
+  const effGroups = useMemo(() => resolveGroupRequirements(groups, single), [groups, single])
+
   // Positions governed by a group are shown via the group, not as single roles.
   const groupMemberPos = useMemo(() => {
     const s = new Set<string>()
-    for (const g of groups) for (const r of g.roles) s.add(r.position_id)
+    for (const g of effGroups) for (const r of g.roles) s.add(r.position_id)
     return s
-  }, [groups])
+  }, [effGroups])
 
   const rows = useMemo(() => {
-    return reqs
+    return effSingles
       .filter((r) => r.required_count > 0 && !groupMemberPos.has(r.position_id))
       .filter((r) => pickedRoles.size === 0 || pickedRoles.has(r.position_id))
       .map((r) => {
         const f = fill.get(r.position_id) ?? { count: 0, names: [] }
         return { ...r, current: f.count, names: f.names, gap: Math.max(0, r.required_count - f.count) }
       })
-  }, [reqs, fill, pickedRoles, groupMemberPos])
+  }, [effSingles, fill, pickedRoles, groupMemberPos])
 
   // Group rows for the single-location table (fill comes from the location's
   // per-position fill map).
   const groupRows = useMemo(() => {
-    return groups
+    return effGroups
       .filter((g) => pickedRoles.size === 0 || g.roles.some((r) => pickedRoles.has(r.position_id)))
       .map((g) => {
         const filledByPos = new Map<string, number>()
@@ -189,7 +197,7 @@ export function GapView({ session, profile }: GapViewProps) {
         const gg = groupGap(g, filledByPos)
         return { id: g.id, name: g.name, total_min: g.total_min, current: gg.filledTotal, gap: gg.gap, detail: gg.detail, names }
       })
-  }, [groups, fill, pickedRoles])
+  }, [effGroups, fill, pickedRoles])
 
   const totals = useMemo(() => {
     const required =
@@ -325,6 +333,7 @@ export function GapView({ session, profile }: GapViewProps) {
           mgmt={mgmt}
           reqs={reqs}
           groups={groups}
+          locations={locations}
           actor={actor}
           onSaved={loadReqs}
           onClose={() => setShowConfig(false)}
@@ -698,6 +707,7 @@ function RequirementsEditor({
   mgmt,
   reqs,
   groups,
+  locations,
   actor,
   onSaved,
   onClose,
@@ -705,32 +715,50 @@ function RequirementsEditor({
   mgmt: MgmtPosition[]
   reqs: RoleRequirement[]
   groups: RequirementGroup[]
+  locations: GapLocation[]
   actor: ReturnType<typeof actorFrom>
   onSaved: () => void
   onClose: () => void
 }) {
-  const reqByPos = useMemo(() => new Map(reqs.map((r) => [r.position_id, r.required_count])), [reqs])
+  // null scope = the global default; a location id = that location's overrides.
+  const [scope, setScope] = useState<string | null>(null)
+  const scopeName = scope ? locations.find((l) => l.id === scope)?.name ?? 'location' : null
+
+  const effSingles = useMemo(() => resolveSingleRequirements(reqs, scope), [reqs, scope])
+  const effGroups = useMemo(() => resolveGroupRequirements(groups, scope), [groups, scope])
+  const effCountByPos = useMemo(
+    () => new Map(effSingles.map((r) => [r.position_id, r.required_count])),
+    [effSingles],
+  )
+  // Positions with an explicit override at THIS location (for the reset action).
+  const overriddenPos = useMemo(
+    () => new Set(reqs.filter((r) => r.location_id === scope && scope !== null).map((r) => r.position_id)),
+    [reqs, scope],
+  )
   const memberPos = useMemo(() => {
     const s = new Set<string>()
-    for (const g of groups) for (const r of g.roles) s.add(r.position_id)
+    for (const g of effGroups) for (const r of g.roles) s.add(r.position_id)
     return s
-  }, [groups])
+  }, [effGroups])
   // Roles governed by a pool are managed there, not as a single count.
   const singleRoles = useMemo(() => mgmt.filter((m) => !memberPos.has(m.id)), [mgmt, memberPos])
+
   const [edits, setEdits] = useState<Map<string, number>>(new Map())
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  // Switching scope discards unsaved single-count edits.
+  useEffect(() => setEdits(new Map()), [scope])
 
-  const value = (id: string) => edits.get(id) ?? reqByPos.get(id) ?? 0
+  const value = (id: string) => edits.get(id) ?? effCountByPos.get(id) ?? 0
 
   async function save() {
     setSaving(true)
     setErr(null)
     try {
       for (const [posId, count] of edits) {
-        if (count === (reqByPos.get(posId) ?? 0)) continue
+        if (count === (effCountByPos.get(posId) ?? 0)) continue
         const name = mgmt.find((m) => m.id === posId)?.name ?? 'role'
-        await setRoleRequirement(actor, posId, name, count)
+        await setRoleRequirement(actor, posId, name, count, scope)
       }
       setEdits(new Map())
       onSaved()
@@ -741,32 +769,102 @@ function RequirementsEditor({
     }
   }
 
+  async function resetRole(posId: string, name: string) {
+    if (scope === null) return
+    setErr(null)
+    try {
+      await clearRoleRequirement(actor, posId, name, scope)
+      setEdits((prev) => {
+        const next = new Map(prev)
+        next.delete(posId)
+        return next
+      })
+      onSaved()
+    } catch (e) {
+      setErr(errText(e))
+    }
+  }
+
+  const open = locations.filter((l) => l.status === 'open')
+  const opening = locations.filter((l) => l.status === 'opening')
+
   return (
     <div className="mb-4 rounded-xl border border-cg-orange/40 bg-cg-orange-soft/30 p-4">
-      <div className="mb-2 flex items-center justify-between">
-        <p className="text-xs font-medium uppercase tracking-wide text-charcoal/50">
-          Required roster (base template — applies to every restaurant)
-        </p>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium uppercase tracking-wide text-charcoal/50">
+            Required roster for
+          </span>
+          <select
+            value={scope ?? ''}
+            onChange={(e) => setScope(e.target.value || null)}
+            className="rounded-md border border-surface-line bg-surface px-2 py-1.5 text-sm font-medium"
+          >
+            <option value="">Global default (all restaurants)</option>
+            {open.length > 0 && (
+              <optgroup label="Open">
+                {open.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {opening.length > 0 && (
+              <optgroup label="Upcoming">
+                {opening.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+        </div>
         <button onClick={onClose} className="text-xs font-medium text-charcoal/50 hover:text-charcoal">
           Done
         </button>
       </div>
+      <p className="mb-2 text-[11px] text-charcoal/55">
+        {scope === null
+          ? 'The baseline every restaurant is measured against unless it has its own override.'
+          : `${scopeName} inherits the global default; anything you set here overrides it for this site only.`}
+      </p>
       <div className="grid gap-2 sm:grid-cols-2">
-        {singleRoles.map((m) => (
-          <label key={m.id} className="flex items-center justify-between gap-2 text-sm">
-            <span className="text-charcoal/70">{m.name}</span>
-            <input
-              type="number"
-              min={0}
-              value={value(m.id)}
-              onChange={(e) => {
-                const n = Math.max(0, parseInt(e.target.value || '0', 10))
-                setEdits((prev) => new Map(prev).set(m.id, n))
-              }}
-              className="w-16 rounded-md border border-surface-line bg-surface px-2 py-1 text-center text-sm"
-            />
-          </label>
-        ))}
+        {singleRoles.map((m) => {
+          const isOverride = overriddenPos.has(m.id)
+          return (
+            <div key={m.id} className="flex items-center justify-between gap-2 text-sm">
+              <span className="flex items-center gap-1.5 text-charcoal/70">
+                {m.name}
+                {scope !== null &&
+                  (isOverride ? (
+                    <button
+                      onClick={() => void resetRole(m.id, m.name)}
+                      className="rounded-full bg-info/10 px-1.5 py-0.5 text-[10px] font-medium text-info hover:bg-info/20"
+                      title="Remove this override — inherit the global default again"
+                    >
+                      override · reset
+                    </button>
+                  ) : (
+                    <span className="rounded-full bg-surface-muted px-1.5 py-0.5 text-[10px] text-charcoal/40">
+                      inherited
+                    </span>
+                  ))}
+              </span>
+              <input
+                type="number"
+                min={0}
+                value={value(m.id)}
+                onChange={(e) => {
+                  const n = Math.max(0, parseInt(e.target.value || '0', 10))
+                  setEdits((prev) => new Map(prev).set(m.id, n))
+                }}
+                className="w-16 rounded-md border border-surface-line bg-surface px-2 py-1 text-center text-sm"
+              />
+            </div>
+          )
+        })}
       </div>
       {err && <p className="mt-2 text-xs text-danger">{err}</p>}
       <button
@@ -777,28 +875,41 @@ function RequirementsEditor({
         {saving ? 'Saving…' : 'Save counts'}
       </button>
 
-      <GroupEditor groups={groups} mgmt={mgmt} actor={actor} onChanged={onSaved} />
+      <GroupEditor key={scope ?? 'global'} groups={effGroups} mgmt={mgmt} actor={actor} scope={scope} onChanged={onSaved} />
     </div>
   )
 }
+
+type GroupEdit =
+  | { mode: 'edit'; group: RequirementGroup }
+  | { mode: 'new' }
+  | { mode: 'fork'; from: RequirementGroup }
 
 function GroupEditor({
   groups,
   mgmt,
   actor,
+  scope,
   onChanged,
 }: {
   groups: RequirementGroup[]
   mgmt: MgmtPosition[]
   actor: ReturnType<typeof actorFrom>
+  scope: string | null
   onChanged: () => void
 }) {
-  const [editing, setEditing] = useState<null | RequirementGroup | 'new'>(null)
+  const [editing, setEditing] = useState<GroupEdit | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
+  const isInherited = (g: RequirementGroup) => scope !== null && g.location_id === null
+
   async function remove(g: RequirementGroup) {
-    if (!window.confirm(`Delete pool "${g.name}"?`)) return
+    const isOverride = g.overrides_group_id !== null
+    const msg = isOverride
+      ? `Remove this location override of "${g.name}" (back to the global pool)?`
+      : `Delete pool "${g.name}"?`
+    if (!window.confirm(msg)) return
     setBusy(true)
     setErr(null)
     try {
@@ -809,6 +920,15 @@ function GroupEditor({
     } finally {
       setBusy(false)
     }
+  }
+
+  function badge(g: RequirementGroup) {
+    if (scope === null) return null
+    if (isInherited(g))
+      return <span className="rounded-full bg-surface-muted px-1.5 py-0.5 text-[10px] text-charcoal/40">inherited</span>
+    if (g.overrides_group_id)
+      return <span className="rounded-full bg-info/10 px-1.5 py-0.5 text-[10px] font-medium text-info">overrides global</span>
+    return <span className="rounded-full bg-info/10 px-1.5 py-0.5 text-[10px] font-medium text-info">location only</span>
   }
 
   return (
@@ -829,7 +949,7 @@ function GroupEditor({
             className="flex items-start justify-between gap-2 rounded-md border border-surface-line bg-surface px-3 py-1.5 text-sm"
           >
             <div className="min-w-0">
-              <span className="font-medium">{g.name}</span>{' '}
+              <span className="font-medium">{g.name}</span> {badge(g)}{' '}
               <span className="text-charcoal/60">= {g.total_min} total</span>
               <span className="text-charcoal/50">
                 {' · '}
@@ -837,17 +957,31 @@ function GroupEditor({
               </span>
             </div>
             <div className="flex shrink-0 items-center gap-1">
-              <button onClick={() => setEditing(g)} className="rounded px-1 text-xs font-medium text-cg-orange hover:underline">
-                Edit
-              </button>
-              <button
-                onClick={() => void remove(g)}
-                disabled={busy}
-                aria-label="Delete pool"
-                className="rounded p-1 text-charcoal/40 hover:text-danger disabled:opacity-50"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
+              {isInherited(g) ? (
+                <button
+                  onClick={() => setEditing({ mode: 'fork', from: g })}
+                  className="rounded px-1 text-xs font-medium text-cg-orange hover:underline"
+                >
+                  Override here
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setEditing({ mode: 'edit', group: g })}
+                    className="rounded px-1 text-xs font-medium text-cg-orange hover:underline"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => void remove(g)}
+                    disabled={busy}
+                    aria-label={g.overrides_group_id ? 'Remove override' : 'Delete pool'}
+                    className="rounded p-1 text-charcoal/40 hover:text-danger disabled:opacity-50"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </>
+              )}
             </div>
           </li>
         ))}
@@ -855,8 +989,14 @@ function GroupEditor({
       {err && <p className="mt-1 text-xs text-danger">{err}</p>}
       {editing ? (
         <GroupForm
-          key={editing === 'new' ? 'new' : editing.id}
-          initial={editing === 'new' ? null : editing}
+          key={editing.mode === 'edit' ? editing.group.id : editing.mode === 'fork' ? `fork-${editing.from.id}` : 'new'}
+          initial={editing.mode === 'edit' ? editing.group : null}
+          prefill={editing.mode === 'fork' ? editing.from : null}
+          createScope={
+            editing.mode === 'edit'
+              ? null
+              : { location_id: scope, overrides_group_id: editing.mode === 'fork' ? editing.from.id : null }
+          }
           mgmt={mgmt}
           actor={actor}
           onDone={() => {
@@ -867,10 +1007,10 @@ function GroupEditor({
         />
       ) : (
         <button
-          onClick={() => setEditing('new')}
+          onClick={() => setEditing({ mode: 'new' })}
           className="mt-2 flex items-center gap-1 rounded-md border border-surface-line bg-surface px-2.5 py-1.5 text-xs font-medium hover:bg-surface-muted"
         >
-          <Plus className="h-3.5 w-3.5" /> Add pool
+          <Plus className="h-3.5 w-3.5" /> {scope === null ? 'Add pool' : 'Add pool for this site'}
         </button>
       )}
     </div>
@@ -879,21 +1019,26 @@ function GroupEditor({
 
 function GroupForm({
   initial,
+  prefill,
+  createScope,
   mgmt,
   actor,
   onDone,
   onCancel,
 }: {
   initial: RequirementGroup | null
+  prefill: RequirementGroup | null
+  createScope: { location_id: string | null; overrides_group_id: string | null } | null
   mgmt: MgmtPosition[]
   actor: ReturnType<typeof actorFrom>
   onDone: () => void
   onCancel: () => void
 }) {
-  const [name, setName] = useState(initial?.name ?? '')
-  const [total, setTotal] = useState(initial?.total_min ?? 0)
+  const seed = initial ?? prefill
+  const [name, setName] = useState(seed?.name ?? '')
+  const [total, setTotal] = useState(seed?.total_min ?? 0)
   const [roleMins, setRoleMins] = useState<Map<string, number>>(
-    () => new Map((initial?.roles ?? []).map((r) => [r.position_id, r.min_count])),
+    () => new Map((seed?.roles ?? []).map((r) => [r.position_id, r.min_count])),
   )
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -920,6 +1065,8 @@ function GroupForm({
         name: name.trim(),
         total_min: total,
         roles: [...roleMins].map(([position_id, min_count]) => ({ position_id, min_count })),
+        location_id: createScope?.location_id ?? null,
+        overrides_group_id: createScope?.overrides_group_id ?? null,
       })
       onDone()
     } catch (e) {
