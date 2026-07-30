@@ -5,7 +5,7 @@
 //  - Single location: required roster vs who's in seat (open) / slated (opening).
 // Admin/executive can edit the required counts. Both modes export to Word (.docx).
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import {
   ArrowDown,
@@ -35,8 +35,6 @@ import {
 import { downloadCompanyGapXlsx, downloadGapXlsx } from './excel'
 import type { UserProfile } from '../../types'
 
-const ALL = '__all__'
-
 const REASON_LABEL: Record<GapReason, string> = {
   'new-site': 'New site',
   backfill: 'Backfill',
@@ -64,7 +62,13 @@ export function GapView({ session, profile }: GapViewProps) {
   const [mgmt, setMgmt] = useState<MgmtPosition[]>([])
   const [locations, setLocations] = useState<GapLocation[]>([])
   const [company, setCompany] = useState<CompanyGap[]>([])
-  const [selectedId, setSelectedId] = useState(ALL)
+  // Location selection: empty = all (company-wide); one = the detailed
+  // single-location view; two+ = the company report filtered to that subset.
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  // Role filter: empty = all roles; otherwise only these position_ids show
+  // (e.g. pick "Sous Chef" to see how many are needed across sites).
+  const [pickedRoles, setPickedRoles] = useState<Set<string>>(new Set())
+  const [openMenu, setOpenMenu] = useState<null | 'loc' | 'role'>(null)
   const [fill, setFill] = useState<Map<string, Fill>>(new Map())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -96,25 +100,44 @@ export function GapView({ session, profile }: GapViewProps) {
       .finally(() => setLoading(false))
   }, [])
 
-  const isAll = selectedId === ALL
-  const selected = locations.find((l) => l.id === selectedId)
+  const single = picked.size === 1 ? [...picked][0] : null
+  const isMulti = picked.size >= 2
+  const selected = single ? locations.find((l) => l.id === single) : undefined
   const upcoming = selected?.status === 'opening'
 
   useEffect(() => {
-    if (isAll || !selectedId || !selected) return
-    fetchFillForLocation(selectedId, selected.status === 'opening')
+    if (!single || !selected) return
+    fetchFillForLocation(single, selected.status === 'opening')
       .then(setFill)
       .catch((e: Error) => setError(e.message))
-  }, [isAll, selectedId, selected])
+  }, [single, selected])
+
+  function toggleLocation(id: string) {
+    setPicked((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  function toggleRole(id: string) {
+    setPickedRoles((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   const rows = useMemo(() => {
     return reqs
       .filter((r) => r.required_count > 0)
+      .filter((r) => pickedRoles.size === 0 || pickedRoles.has(r.position_id))
       .map((r) => {
         const f = fill.get(r.position_id) ?? { count: 0, names: [] }
         return { ...r, current: f.count, names: f.names, gap: Math.max(0, r.required_count - f.count) }
       })
-  }, [reqs, fill])
+  }, [reqs, fill, pickedRoles])
 
   const totals = useMemo(() => {
     const required = rows.reduce((s, r) => s + r.required_count, 0)
@@ -123,16 +146,29 @@ export function GapView({ session, profile }: GapViewProps) {
     return { required, filled, gap }
   }, [rows])
 
+  // Company-wide rows filtered to the picked subset (all when none picked).
+  // Backfill/movers are still computed company-wide in fetchCompanyGaps, so a
+  // subset view stays correct — we only filter what's shown.
+  const visibleCompany = useMemo(
+    () =>
+      company.filter(
+        (g) =>
+          (!isMulti || picked.has(g.location_id)) &&
+          (pickedRoles.size === 0 || pickedRoles.has(g.position_id)),
+      ),
+    [company, isMulti, picked, pickedRoles],
+  )
+
   const companyByReason = useMemo(() => {
     const m: Record<GapReason, number> = { 'new-site': 0, backfill: 0, understaffed: 0 }
-    for (const g of company) m[g.reason] += g.gap
+    for (const g of visibleCompany) m[g.reason] += g.gap
     return m
-  }, [company])
-  const companyTotal = company.reduce((s, g) => s + g.gap, 0)
+  }, [visibleCompany])
+  const companyTotal = visibleCompany.reduce((s, g) => s + g.gap, 0)
 
   const sortedCompany = useMemo(() => {
     const dir = sortDir === 'asc' ? 1 : -1
-    return [...company].sort((a, b) => {
+    return [...visibleCompany].sort((a, b) => {
       let cmp = 0
       switch (sortKey) {
         case 'location':
@@ -155,7 +191,7 @@ export function GapView({ session, profile }: GapViewProps) {
         (a.level ?? Infinity) - (b.level ?? Infinity)
       )
     })
-  }, [company, sortKey, sortDir])
+  }, [visibleCompany, sortKey, sortDir])
 
   function toggleSort(k: CompanySortKey) {
     if (sortKey === k) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -169,7 +205,7 @@ export function GapView({ session, profile }: GapViewProps) {
     setExporting(true)
     setError(null)
     try {
-      if (isAll) {
+      if (!single) {
         await downloadCompanyGapXlsx({ rows: sortedCompany, generatedOn: new Date().toLocaleDateString() })
       } else if (selected && rows.length > 0) {
         await downloadGapXlsx({
@@ -231,40 +267,70 @@ export function GapView({ session, profile }: GapViewProps) {
       )}
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <label className="text-xs uppercase tracking-wide text-charcoal/50">View</label>
-        <select
-          value={selectedId}
-          onChange={(e) => setSelectedId(e.target.value)}
-          className="rounded-md border border-surface-line bg-surface px-3 py-2 text-sm"
+        <FilterMenu
+          label="Locations"
+          summary={
+            picked.size === 0
+              ? 'All locations'
+              : single
+                ? locations.find((l) => l.id === single)?.name ?? '1 location'
+                : `${picked.size} locations`
+          }
+          open={openMenu === 'loc'}
+          onToggle={() => setOpenMenu((m) => (m === 'loc' ? null : 'loc'))}
+          onClear={picked.size ? () => setPicked(new Set()) : undefined}
         >
-          <option value={ALL}>All locations (company-wide)</option>
-          <optgroup label="Upcoming">
-            {locations
-              .filter((l) => l.status === 'opening')
-              .map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                </option>
-              ))}
-          </optgroup>
-          <optgroup label="Open">
-            {locations
-              .filter((l) => l.status === 'open')
-              .map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                </option>
-              ))}
-          </optgroup>
-        </select>
-        {!isAll && upcoming && (
+          <CheckGroup
+            label="Upcoming"
+            items={locations.filter((l) => l.status === 'opening').map((l) => ({ id: l.id, name: l.name }))}
+            selected={picked}
+            onToggle={toggleLocation}
+          />
+          <CheckGroup
+            label="Open"
+            items={locations.filter((l) => l.status === 'open').map((l) => ({ id: l.id, name: l.name }))}
+            selected={picked}
+            onToggle={toggleLocation}
+          />
+        </FilterMenu>
+
+        <FilterMenu
+          label="Roles"
+          summary={
+            pickedRoles.size === 0
+              ? 'All roles'
+              : pickedRoles.size === 1
+                ? reqs.find((r) => r.position_id === [...pickedRoles][0])?.position_name ?? '1 role'
+                : `${pickedRoles.size} roles`
+          }
+          open={openMenu === 'role'}
+          onToggle={() => setOpenMenu((m) => (m === 'role' ? null : 'role'))}
+          onClear={pickedRoles.size ? () => setPickedRoles(new Set()) : undefined}
+        >
+          <CheckGroup
+            label="Management roles"
+            items={reqs
+              .filter((r) => r.required_count > 0)
+              .slice()
+              .sort(
+                (a, b) =>
+                  (a.level ?? Infinity) - (b.level ?? Infinity) ||
+                  a.position_name.localeCompare(b.position_name),
+              )
+              .map((r) => ({ id: r.position_id, name: r.position_name }))}
+            selected={pickedRoles}
+            onToggle={toggleRole}
+          />
+        </FilterMenu>
+
+        {single && upcoming && (
           <span className="rounded-full bg-info/10 px-2 py-0.5 text-xs font-medium text-info">
             upcoming — showing slated
           </span>
         )}
         <button
           onClick={() => void exportExcel()}
-          disabled={exporting || (isAll ? company.length === 0 : rows.length === 0)}
+          disabled={exporting || (single ? rows.length === 0 : sortedCompany.length === 0)}
           className="ml-auto flex items-center gap-1.5 rounded-md border border-surface-line px-2.5 py-1.5 text-xs font-medium hover:bg-surface-muted disabled:opacity-50"
         >
           <Download className="h-3.5 w-3.5" /> {exporting ? 'Preparing…' : 'Download Excel'}
@@ -287,7 +353,7 @@ export function GapView({ session, profile }: GapViewProps) {
         />
       )}
 
-      {isAll ? (
+      {!single ? (
         <>
           <div className="mb-3 flex flex-wrap gap-2 text-xs">
             <Summary label="New-site" n={companyByReason['new-site']} cls={REASON_CLASS['new-site']} />
@@ -433,6 +499,85 @@ function Summary({ label, n, cls }: { label: string; n: number; cls: string }) {
     <span className={`rounded-full px-2.5 py-1 font-medium ${cls}`}>
       {label}: {n}
     </span>
+  )
+}
+
+// A labelled button that opens a checkbox popover. Empty selection = "all".
+function FilterMenu({
+  label,
+  summary,
+  open,
+  onToggle,
+  onClear,
+  children,
+}: {
+  label: string
+  summary: string
+  open: boolean
+  onToggle: () => void
+  onClear?: () => void
+  children: ReactNode
+}) {
+  return (
+    <div className="relative flex items-center gap-1.5">
+      <span className="text-xs uppercase tracking-wide text-charcoal/50">{label}</span>
+      <button
+        onClick={onToggle}
+        className="flex items-center gap-1.5 rounded-md border border-surface-line bg-surface px-3 py-2 text-sm hover:bg-surface-muted"
+      >
+        {summary}
+        <ChevronsUpDown className="h-3.5 w-3.5 opacity-50" />
+      </button>
+      {open && (
+        <>
+          <button aria-label="Close" className="fixed inset-0 z-10 cursor-default" onClick={onToggle} />
+          <div className="absolute left-0 top-full z-20 mt-1 max-h-72 w-64 overflow-auto rounded-md border border-surface-line bg-surface p-2 shadow-lg">
+            {onClear && (
+              <button
+                onClick={onClear}
+                className="mb-1 w-full rounded px-2 py-1 text-left text-xs font-medium text-cg-orange hover:bg-surface-muted"
+              >
+                Clear — show all
+              </button>
+            )}
+            {children}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function CheckGroup({
+  label,
+  items,
+  selected,
+  onToggle,
+}: {
+  label: string
+  items: { id: string; name: string }[]
+  selected: Set<string>
+  onToggle: (id: string) => void
+}) {
+  if (items.length === 0) return null
+  return (
+    <div className="mb-1">
+      <p className="px-2 py-0.5 text-[10px] uppercase tracking-wide text-charcoal/40">{label}</p>
+      {items.map((it) => (
+        <label
+          key={it.id}
+          className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm hover:bg-surface-muted"
+        >
+          <input
+            type="checkbox"
+            checked={selected.has(it.id)}
+            onChange={() => onToggle(it.id)}
+            className="accent-cg-orange"
+          />
+          {it.name}
+        </label>
+      ))}
+    </div>
   )
 }
 

@@ -1,5 +1,12 @@
 # Project Log
 
+## [2026-07-24] Gap analysis: multi-location picker + role filter
+**Shipped:** Two filters on the Gap Analysis view. (1) Multi-location picker — the single View dropdown became a checkbox popover: no selection = company-wide, one = the detailed single-location table (unchanged), two+ = the company report filtered to that subset. Because backfill/movers are still computed company-wide in fetchCompanyGaps, a subset view stays correct — only what's shown is filtered. (2) Role filter — a second popover to show only chosen roles (e.g. "Sous Chef" → how many needed across sites), applied to both the company table and the single-location table; summary chips + Excel export follow the active filters. Added location_id + position_id to CompanyGap for id-based filtering (was name-only). New reusable FilterMenu + CheckGroup components. Build passes.
+**Roadmap:** Gap Analysis now slices by any set of locations and/or roles. Common ask ("how many Sous Chefs do we need") = pick the Sous role, leave locations on All → per-site rows + total.
+**Decisions:** Empty selection = all (both filters). One location keeps the rich per-role table; 2+ uses the company Location/Role/Gap/Type table. Filters compose; export mirrors the on-screen filtered set.
+**Blockers:** none.
+**Next:** —
+
 ## [2026-07-24] Multi-seat follow-ups: Excel import + Bench grid
 **Shipped:** Closed the two multi-seat gaps left by the previous entry. (1) Excel import (gaps/api.ts): fetchSlotIndex now returns a LIST of seats per (location, role) with each seat's incumbent; applyAssignments fills VACANT seats first and creates new ones as needed, never overwriting a seat already held by someone else — so importing 3 Sous for one site lands on 3 separate seats instead of clobbering one. Idempotent (a person already slated for the role is a no-op). (2) Bench coverage grid (BenchView): incomingByCell now collects ALL incumbent names per cell (de-duped) and the pipeline cell renders every "(incoming)" name, not just the last one. Also routed the import's error text through the shared errText. Build passes.
 **Roadmap:** Multi-seat succession (3 Sous, etc.) is now consistent across the Bench list, gap counts, Bench grid, and the Excel round-trip.

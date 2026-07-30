@@ -110,8 +110,10 @@ export async function fetchGapLocations(): Promise<GapLocation[]> {
 export type GapReason = 'new-site' | 'backfill' | 'understaffed'
 
 export interface CompanyGap {
+  location_id: string
   location_name: string
   location_status: 'open' | 'opening'
+  position_id: string
   position_name: string
   level: number | null
   required: number
@@ -215,8 +217,10 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
         const gap = Math.max(0, r.required_count - byId.size)
         if (gap > 0) {
           out.push({
+            location_id: loc.id,
             location_name: loc.name,
             location_status: 'opening',
+            position_id: r.position_id,
             position_name: r.position_name,
             level: r.level,
             required: r.required_count,
@@ -233,8 +237,10 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
         const gap = Math.max(0, r.required_count - projected)
         if (gap > 0) {
           out.push({
+            location_id: loc.id,
             location_name: loc.name,
             location_status: 'open',
+            position_id: r.position_id,
             position_name: r.position_name,
             level: r.level,
             required: r.required_count,
