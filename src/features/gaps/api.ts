@@ -71,24 +71,135 @@ export interface MgmtPosition {
   level: number | null
 }
 
-/** The restaurant management roster (manager + eligible) — the roles the
- * requirements editor lets you set counts for. */
+/** The restaurant roster ladder — every in-restaurant role (GM=10 down to
+ * Chef de Partie=50), which is level >= 10; corporate roles are <= 7. This is
+ * the set the requirements editor + group builder can pick from, so line roles
+ * like Supervisor and Chef de Partie can now be part of the gap analysis. */
 export async function fetchManagementPositions(): Promise<MgmtPosition[]> {
   const { data, error } = await supabase
     .from('people_center_positions')
-    .select('id, name, level, default_person_kind, people_center_eligible')
+    .select('id, name, level, show_in_people_center')
+  if (error) throw error
+  type Row = { id: string; name: string; level: number | null; show_in_people_center: boolean }
+  return ((data as unknown as Row[]) ?? [])
+    .filter((p) => p.show_in_people_center && p.level != null && p.level >= 10)
+    .map((p) => ({ id: p.id, name: p.name, level: p.level }))
+    .sort((a, b) => (a.level ?? Infinity) - (b.level ?? Infinity))
+}
+
+// --- Pooled requirement groups (e.g. kitchen line = 5, min 2 Sous) ----------
+
+export interface GroupRole {
+  position_id: string
+  position_name: string
+  level: number | null
+  min_count: number
+}
+export interface RequirementGroup {
+  id: string
+  name: string
+  total_min: number
+  roles: GroupRole[]
+}
+
+export async function fetchRequirementGroups(): Promise<RequirementGroup[]> {
+  const { data, error } = await supabase
+    .from('people_center_requirement_groups')
+    .select(
+      `id, name, total_min, sort_order,
+       roles:people_center_requirement_group_roles (
+         position_id, min_count, positions:people_center_positions ( name, level ) )`,
+    )
+    .order('sort_order')
   if (error) throw error
   type Row = {
     id: string
     name: string
-    level: number | null
-    default_person_kind: string
-    people_center_eligible: boolean
+    total_min: number
+    sort_order: number
+    roles: {
+      position_id: string
+      min_count: number
+      positions: { name: string; level: number | null } | null
+    }[]
   }
-  return ((data as unknown as Row[]) ?? [])
-    .filter((p) => p.default_person_kind === 'manager' && p.people_center_eligible)
-    .map((p) => ({ id: p.id, name: p.name, level: p.level }))
-    .sort((a, b) => (a.level ?? Infinity) - (b.level ?? Infinity))
+  return ((data as unknown as Row[]) ?? []).map((g) => ({
+    id: g.id,
+    name: g.name,
+    total_min: g.total_min,
+    roles: (g.roles ?? [])
+      .map((r) => ({
+        position_id: r.position_id,
+        position_name: r.positions?.name ?? '?',
+        level: r.positions?.level ?? null,
+        min_count: r.min_count,
+      }))
+      .sort((a, b) => (a.level ?? Infinity) - (b.level ?? Infinity)),
+  }))
+}
+
+export async function saveRequirementGroup(
+  actor: Actor,
+  group: { id?: string; name: string; total_min: number; roles: { position_id: string; min_count: number }[] },
+): Promise<void> {
+  let groupId = group.id
+  if (groupId) {
+    const { error } = await supabase
+      .from('people_center_requirement_groups')
+      .update({ name: group.name, total_min: group.total_min, updated_by: actor.personId, updated_by_name: actor.name })
+      .eq('id', groupId)
+    if (error) throw error
+  } else {
+    const { data, error } = await supabase
+      .from('people_center_requirement_groups')
+      .insert({ name: group.name, total_min: group.total_min, updated_by: actor.personId, updated_by_name: actor.name })
+      .select('id')
+    if (error) throw error
+    groupId = data![0].id as string
+  }
+  // Replace the group's roles wholesale.
+  await supabase.from('people_center_requirement_group_roles').delete().eq('group_id', groupId)
+  if (group.roles.length > 0) {
+    const { error } = await supabase.from('people_center_requirement_group_roles').insert(
+      group.roles.map((r) => ({ group_id: groupId, position_id: r.position_id, min_count: r.min_count })),
+    )
+    if (error) throw error
+  }
+  await recordAudit(actor, group.id ? 'update' : 'create', 'requirement_group', groupId ?? null, group.name,
+    `Group "${group.name}" = ${group.total_min} total across ${group.roles.length} role(s)`)
+}
+
+export async function deleteRequirementGroup(actor: Actor, id: string, name: string): Promise<void> {
+  const { error } = await supabase.from('people_center_requirement_groups').delete().eq('id', id)
+  if (error) throw error
+  await recordAudit(actor, 'delete', 'requirement_group', id, name, `Deleted group "${name}"`)
+}
+
+/** Gap for one pooled group given how many of each role are filled:
+ *  max( total_min − filledTotal,  Σ per-role min shortfalls ). */
+export function groupGap(
+  group: RequirementGroup,
+  filledByPosition: Map<string, number>,
+): { gap: number; filledTotal: number; detail: string } {
+  let filledTotal = 0
+  let minShort = 0
+  const parts: string[] = []
+  for (const r of group.roles) {
+    const f = filledByPosition.get(r.position_id) ?? 0
+    filledTotal += f
+    if (r.min_count > 0) {
+      minShort += Math.max(0, r.min_count - f)
+      parts.push(`${r.position_name} ${f}/${r.min_count} min`)
+    } else {
+      parts.push(`${r.position_name} ${f}`)
+    }
+  }
+  const totalShort = Math.max(0, group.total_min - filledTotal)
+  return {
+    gap: Math.max(totalShort, minShort),
+    filledTotal,
+    detail: `have ${filledTotal}/${group.total_min}${parts.length ? ` · ${parts.join(', ')}` : ''}`,
+  }
 }
 
 export interface GapLocation {
@@ -113,8 +224,10 @@ export interface CompanyGap {
   location_id: string
   location_name: string
   location_status: 'open' | 'opening'
-  position_id: string
-  position_name: string
+  kind: 'role' | 'group'
+  position_id: string // role: the position id; group: the group id
+  position_name: string // role: role name; group: group name
+  member_position_ids?: string[] // group only — its roles, for role-filtering
   level: number | null
   required: number
   projected: number
@@ -129,8 +242,9 @@ export interface CompanyGap {
  * slated), backfill (open site losing someone to a new site), understaffed
  * (open site already below the required roster). */
 export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
-  const [reqs, locs, assignRes, slotRes] = await Promise.all([
+  const [reqs, groups, locs, assignRes, slotRes] = await Promise.all([
     fetchRoleRequirements(),
+    fetchRequirementGroups(),
     fetchGapLocations(),
     supabase
       .from('people_center_position_assignments')
@@ -152,7 +266,13 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
   if (assignRes.error) throw assignRes.error
   if (slotRes.error) throw slotRes.error
 
-  const required = reqs.filter((r) => r.required_count > 0)
+  // A position governed by a group is NOT also counted as a single role (the
+  // group owns it), so we don't double-count.
+  const groupMemberPositions = new Set<string>()
+  for (const g of groups) for (const r of g.roles) groupMemberPositions.add(r.position_id)
+  const required = reqs.filter(
+    (r) => r.required_count > 0 && !groupMemberPositions.has(r.position_id),
+  )
   const key = (locId: string, posId: string) => `${locId}|${posId}`
 
   // Current seats at OPEN locations, and everyone's origin (person → their seat).
@@ -203,6 +323,21 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
     moverDest.set(s.incumbent_person_id, s.location.name)
   }
 
+  // Projected fill of one (location, position): open → current staff minus
+  // movers; opening → slated ∪ incoming, de-duped by person. Shared by the
+  // single-role rows and the group evaluation.
+  const projectedFill = (loc: GapLocation, positionId: string): number => {
+    const k = key(loc.id, positionId)
+    if (loc.status === 'opening') {
+      const ids = new Set<string>()
+      for (const p of slatedByCell.get(k) ?? []) ids.add(p.id)
+      for (const p of openingAsgByCell.get(k) ?? []) ids.add(p.id)
+      return ids.size
+    }
+    const cur = curByCell.get(k) ?? []
+    return cur.length - cur.filter((p) => moverDest.has(p.id)).length
+  }
+
   const out: CompanyGap[] = []
   for (const loc of locs) {
     for (const r of required) {
@@ -220,6 +355,7 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
             location_id: loc.id,
             location_name: loc.name,
             location_status: 'opening',
+            kind: 'role',
             position_id: r.position_id,
             position_name: r.position_name,
             level: r.level,
@@ -240,6 +376,7 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
             location_id: loc.id,
             location_name: loc.name,
             location_status: 'open',
+            kind: 'role',
             position_id: r.position_id,
             position_name: r.position_name,
             level: r.level,
@@ -250,6 +387,31 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
             detail: movers.map((m) => `${m.name} → ${moverDest.get(m.id)}`).join(', '),
           })
         }
+      }
+    }
+
+    // Pooled group requirements for this location.
+    for (const g of groups) {
+      if (g.roles.length === 0) continue
+      const filledByPos = new Map<string, number>()
+      for (const gr of g.roles) filledByPos.set(gr.position_id, projectedFill(loc, gr.position_id))
+      const { gap, filledTotal, detail } = groupGap(g, filledByPos)
+      if (gap > 0) {
+        out.push({
+          location_id: loc.id,
+          location_name: loc.name,
+          location_status: loc.status === 'opening' ? 'opening' : 'open',
+          kind: 'group',
+          position_id: g.id,
+          position_name: g.name,
+          member_position_ids: g.roles.map((r) => r.position_id),
+          level: Math.min(...g.roles.map((r) => r.level ?? Infinity)),
+          required: g.total_min,
+          projected: filledTotal,
+          gap,
+          reason: loc.status === 'opening' ? 'new-site' : 'understaffed',
+          detail,
+        })
       }
     }
   }
