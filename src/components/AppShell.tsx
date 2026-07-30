@@ -12,7 +12,6 @@ import {
   ClipboardList,
   Database,
   HelpCircle,
-  Lightbulb,
   Map,
   MapPin,
   Network,
@@ -26,8 +25,8 @@ import {
 import { signOut } from '../features/auth/useSession'
 import { can, toPermissionUser, type Resource } from '../permissions'
 import type { UserProfile } from '../types'
-import { SuggestionsPanel } from '../features/suggestions/SuggestionsPanel'
 import { HelpPanel } from '../features/help/HelpPanel'
+import { FeedbackWidget } from './FeedbackWidget'
 import monogram from '../assets/CG Logo Small.png'
 
 export type View =
@@ -77,7 +76,6 @@ export function AppShell({
   const [expanded, setExpanded] = useState(
     () => localStorage.getItem(NAV_PREF_KEY) === '1',
   )
-  const [suggestionsOpen, setSuggestionsOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
 
   function toggleNav() {
@@ -147,14 +145,6 @@ export function AppShell({
             >
               <HelpCircle className="h-4 w-4" />
             </button>
-            <button
-              onClick={() => setSuggestionsOpen(true)}
-              title="Suggestions"
-              aria-label="Suggestions"
-              className="rounded-md border border-surface-line p-1.5 text-charcoal/60 hover:bg-surface-muted hover:text-cg-orange"
-            >
-              <Lightbulb className="h-4 w-4" />
-            </button>
             <UserMenu session={session} profile={profile} profileError={profileError} />
           </div>
         </header>
@@ -163,13 +153,11 @@ export function AppShell({
 
       {helpOpen && <HelpPanel onClose={() => setHelpOpen(false)} />}
 
-      {suggestionsOpen && (
-        <SuggestionsPanel
-          profile={profile}
-          pageContext={view === 'data_sources' ? 'Data Sources' : view === 'org_chart' ? 'Org Chart' : view === 'upcoming' ? 'Upcoming' : view === 'gaps' ? 'Gap Analysis' : view === 'bench' ? 'Bench & Risk' : view === 'coverage' ? 'Covered locations' : view === 'users' ? 'Users' : view === 'visit' ? 'Visit' : 'Directory'}
-          onClose={() => setSuggestionsOpen(false)}
-        />
-      )}
+      {/* Global feedback widget: floats over every screen; screen context
+          reuses the nav labels so reports read naturally in triage. */}
+      <FeedbackWidget
+        screen={NAV.find((n) => n.view === view)?.label ?? 'Directory'}
+      />
     </div>
   )
 }
