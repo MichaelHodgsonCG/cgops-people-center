@@ -96,10 +96,10 @@ export function HelpPanel({ onClose }: { onClose: () => void }) {
             in the project repository.
           </Section>
 
-          <Section title="Suggestions">
-            The lightbulb in the header. Any idea, gap, or wording fix — big
-            or small. You'll see your own suggestions and their status;
-            admins triage all of them.
+          <Section title="Feedback">
+            The floating button at the bottom-right of every screen. Any bug,
+            idea, or question — big or small. Reports go to the platform
+            feedback queue, where admins triage them.
           </Section>
 
           <Section title="Data Sources (admins only)">
