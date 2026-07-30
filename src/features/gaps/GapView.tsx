@@ -128,6 +128,20 @@ export function GapView({ session, profile }: GapViewProps) {
       return next
     })
   }
+  function setManyLocations(ids: string[], on: boolean) {
+    setPicked((prev) => {
+      const next = new Set(prev)
+      ids.forEach((id) => (on ? next.add(id) : next.delete(id)))
+      return next
+    })
+  }
+  function setManyRoles(ids: string[], on: boolean) {
+    setPickedRoles((prev) => {
+      const next = new Set(prev)
+      ids.forEach((id) => (on ? next.add(id) : next.delete(id)))
+      return next
+    })
+  }
 
   const rows = useMemo(() => {
     return reqs
@@ -285,12 +299,14 @@ export function GapView({ session, profile }: GapViewProps) {
             items={locations.filter((l) => l.status === 'opening').map((l) => ({ id: l.id, name: l.name }))}
             selected={picked}
             onToggle={toggleLocation}
+            onSetMany={setManyLocations}
           />
           <CheckGroup
             label="Open"
             items={locations.filter((l) => l.status === 'open').map((l) => ({ id: l.id, name: l.name }))}
             selected={picked}
             onToggle={toggleLocation}
+            onSetMany={setManyLocations}
           />
         </FilterMenu>
 
@@ -320,6 +336,7 @@ export function GapView({ session, profile }: GapViewProps) {
               .map((r) => ({ id: r.position_id, name: r.position_name }))}
             selected={pickedRoles}
             onToggle={toggleRole}
+            onSetMany={setManyRoles}
           />
         </FilterMenu>
 
@@ -553,16 +570,30 @@ function CheckGroup({
   items,
   selected,
   onToggle,
+  onSetMany,
 }: {
   label: string
   items: { id: string; name: string }[]
   selected: Set<string>
   onToggle: (id: string) => void
+  onSetMany?: (ids: string[], on: boolean) => void
 }) {
   if (items.length === 0) return null
+  const ids = items.map((i) => i.id)
+  const allSelected = ids.every((id) => selected.has(id))
   return (
     <div className="mb-1">
-      <p className="px-2 py-0.5 text-[10px] uppercase tracking-wide text-charcoal/40">{label}</p>
+      <div className="flex items-center justify-between gap-2 px-2 py-0.5">
+        <p className="text-[10px] uppercase tracking-wide text-charcoal/40">{label}</p>
+        {onSetMany && (
+          <button
+            onClick={() => onSetMany(ids, !allSelected)}
+            className="text-[10px] font-medium text-cg-orange hover:underline"
+          >
+            {allSelected ? 'Clear' : 'Select all'}
+          </button>
+        )}
+      </div>
       {items.map((it) => (
         <label
           key={it.id}
