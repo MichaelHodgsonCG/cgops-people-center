@@ -44,7 +44,7 @@ export default function App() {
   const guarded =
     (view === 'data_sources' && !can(user, 'view', 'data_sources')) ||
     (view === 'bench' && !can(user, 'view', 'bench')) ||
-    (view === 'gaps' && !can(user, 'view', 'bench')) ||
+    (view === 'gaps' && !can(user, 'view', 'gap_analysis')) ||
     (view === 'coverage' && !can(user, 'view', 'user_scopes')) ||
     (view === 'users' && !can(user, 'view', 'admin_area'))
   const effectiveView: View = guarded ? 'directory' : view

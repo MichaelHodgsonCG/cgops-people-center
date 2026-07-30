@@ -24,6 +24,7 @@ export type Resource =
   | 'directory'
   | 'org_chart'
   | 'bench' // succession + bench/risk dashboard (executive altitude)
+  | 'gap_analysis' // staffing gap analysis: HQ-altitude view, executive/admin edit
   | 'data_sources'
   | 'person' // profile editing, assignments, review-flag clearing
   | 'notes' // leadership/development/relationship capture
@@ -86,6 +87,15 @@ export function can(
       // Phase 3, gated per-seat by people_center_covers_location, not via can().
       if (action === 'view') return ['executive', 'regional_leader'].includes(user.role)
       return user.role === 'executive'
+    case 'gap_analysis':
+      // View: HQ altitude (executive) + Regional Ops Leaders (company-wide gap
+      // picture, same rationale as bench) + the view-only hq_analyst tier.
+      // Editing the required roster and pools stays executive/admin — mirrors
+      // the RLS write policies on role_requirements + requirement_groups, so an
+      // hq_analyst can look but never touch.
+      if (action === 'view')
+        return ['executive', 'regional_leader', 'hq_analyst'].includes(user.role)
+      return action === 'update' && user.role === 'executive'
     case 'person':
       // HQ profile editing (20260704160000) + incoming-hire creation
       // (20260707090000): executives edit profiles/assignments and add

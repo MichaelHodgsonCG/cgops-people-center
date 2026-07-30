@@ -21,6 +21,7 @@ const ROLE_LABELS: Record<AppRole, string> = {
   regional_leader: 'Regional leader',
   location_leader: 'Location leader',
   viewer: 'Viewer (read-only)',
+  hq_analyst: 'HQ analyst (gap view-only)',
 }
 
 interface PersonOption {

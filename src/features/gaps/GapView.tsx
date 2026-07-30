@@ -41,6 +41,7 @@ import {
   type RoleRequirement,
 } from './api'
 import { downloadCompanyGapXlsx, downloadGapXlsx } from './excel'
+import { can, toPermissionUser } from '../../permissions'
 import type { UserProfile } from '../../types'
 
 const REASON_LABEL: Record<GapReason, string> = {
@@ -64,7 +65,7 @@ interface GapViewProps {
 
 export function GapView({ session, profile }: GapViewProps) {
   const actor = actorFrom(profile, session)
-  const canEdit = profile?.role === 'admin' || profile?.role === 'executive'
+  const canEdit = can(profile ? toPermissionUser(profile) : null, 'update', 'gap_analysis')
 
   const [reqs, setReqs] = useState<RoleRequirement[]>([])
   const [groups, setGroups] = useState<RequirementGroup[]>([])

@@ -45,7 +45,7 @@ const NAV: { view: View; label: string; resource: Resource; icon: LucideIcon }[]
   { view: 'visit', label: 'Visit', resource: 'directory', icon: MapPin },
   { view: 'org_chart', label: 'Org Chart', resource: 'org_chart', icon: Network },
   { view: 'upcoming', label: 'Upcoming', resource: 'org_chart', icon: Store },
-  { view: 'gaps', label: 'Gap Analysis', resource: 'bench', icon: ClipboardList },
+  { view: 'gaps', label: 'Gap Analysis', resource: 'gap_analysis', icon: ClipboardList },
   { view: 'bench', label: 'Bench & Risk', resource: 'bench', icon: BarChart3 },
   { view: 'data_sources', label: 'Data Sources', resource: 'data_sources', icon: Database },
   { view: 'coverage', label: 'Covered locations', resource: 'user_scopes', icon: Map },
