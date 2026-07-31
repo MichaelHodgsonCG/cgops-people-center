@@ -26,6 +26,7 @@ import { errText } from '../../lib/errText'
 import {
   EMPTY_FILL,
   deleteRequirementGroup,
+  fetchBenchForLocation,
   fetchCompanyGaps,
   fetchFillForLocation,
   fetchGapLocations,
@@ -134,10 +135,16 @@ export function GapView({ session, profile }: GapViewProps) {
   const selected = single ? locations.find((l) => l.id === single) : undefined
   const upcoming = selected?.status === 'opening'
 
+  // Ranked successors per seat (single-location view) — a plan, not fill.
+  const [bench, setBench] = useState<Map<string, string[]>>(new Map())
+
   useEffect(() => {
     if (!single || !selected) return
     fetchFillForLocation(single, selected.status === 'opening')
       .then(setFill)
+      .catch((e: Error) => setError(e.message))
+    fetchBenchForLocation(single)
+      .then(setBench)
       .catch((e: Error) => setError(e.message))
   }, [single, selected])
 
@@ -342,7 +349,11 @@ export function GapView({ session, profile }: GapViewProps) {
         await downloadCompanyGapXlsx({
           rows: sortedCompany.map((r) => ({
             ...r,
-            detail: [r.detail, r.incoming_names?.length ? `incoming: ${r.incoming_names.join(', ')}` : '']
+            detail: [
+              r.detail,
+              r.incoming_names?.length ? `incoming: ${r.incoming_names.join(', ')}` : '',
+              r.bench_names?.length ? `bench: ${r.bench_names.join(', ')}` : '',
+            ]
               .filter(Boolean)
               .join(' · '),
           })),
@@ -358,7 +369,13 @@ export function GapView({ session, profile }: GapViewProps) {
               required_count: r.required_count,
               current: r.current,
               gap: r.gap,
-              names: [...r.names, ...r.incomingNames.map((n) => `${n} (incoming)`)],
+              names: [
+                ...r.names,
+                ...r.incomingNames.map((n) => `${n} (incoming)`),
+                ...(r.gap > 0 && bench.get(r.position_id)?.length
+                  ? [`bench: ${bench.get(r.position_id)!.join(', ')}`]
+                  : []),
+              ],
             })),
             ...groupRows.flatMap((g) => [
               {
@@ -600,7 +617,16 @@ export function GapView({ session, profile }: GapViewProps) {
                             {g.detail ? ' · ' : ''}incoming: {g.incoming_names?.join(', ')}
                           </span>
                         )}
-                        {!g.detail && (g.incoming_names?.length ?? 0) === 0 && '—'}
+                        {(g.bench_names?.length ?? 0) > 0 && (
+                          <span className="font-medium text-success">
+                            {g.detail || (g.incoming_names?.length ?? 0) > 0 ? ' · ' : ''}bench:{' '}
+                            {g.bench_names?.join(', ')}
+                          </span>
+                        )}
+                        {!g.detail &&
+                          (g.incoming_names?.length ?? 0) === 0 &&
+                          (g.bench_names?.length ?? 0) === 0 &&
+                          '—'}
                       </td>
                     </tr>
                   ))
@@ -640,6 +666,11 @@ export function GapView({ session, profile }: GapViewProps) {
                   </td>
                   <td className="px-4 py-2.5 text-xs text-charcoal/60">
                     <Names names={r.names} incoming={r.incomingNames} empty={upcoming ? 'not yet named' : '—'} />
+                    {r.gap > 0 && (bench.get(r.position_id)?.length ?? 0) > 0 && (
+                      <span className="font-medium text-success">
+                        {' · '}bench: {bench.get(r.position_id)?.join(', ')}
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -694,6 +725,11 @@ export function GapView({ session, profile }: GapViewProps) {
                       </td>
                       <td className="px-4 py-2.5 text-xs text-charcoal/60">
                         <Names names={m.names} incoming={m.incomingNames} empty={upcoming ? 'not yet named' : '—'} />
+                        {g.gap > 0 && (bench.get(m.position_id)?.length ?? 0) > 0 && (
+                          <span className="font-medium text-success">
+                            {' · '}bench: {bench.get(m.position_id)?.join(', ')}
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))}
