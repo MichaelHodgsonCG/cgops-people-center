@@ -40,6 +40,7 @@ import {
   fetchManagerCandidates,
   fetchRelationshipNotes,
   fetchRestrictedNotes,
+  fetchViewerIsAbove,
   reassignPrimary,
   setManager,
   updatePersonProfile,
@@ -75,7 +76,15 @@ export function PersonPanel({ personId, session, profile, onClose, onChanged }: 
   const actor = actorFrom(profile, session)
   const isAdmin = user?.role === 'admin'
   const canEdit = can(user, 'update', 'person')
-  const canWriteNotes = isAdmin || can(user, 'create', 'notes')
+  // HQ altitude (admin/executive) may note anyone; manager roles
+  // (regional_leader/location_leader) may note only people BELOW them in the
+  // reporting chain — mirrors the notes INSERT RLS. viewerIsAbove is resolved
+  // per opened person below.
+  const isHqAltitude = user?.role === 'admin' || user?.role === 'executive'
+  const managerRole = user?.role === 'regional_leader' || user?.role === 'location_leader'
+  const [viewerIsAbove, setViewerIsAbove] = useState(false)
+  const canWriteNotes =
+    can(user, 'create', 'notes') && (isHqAltitude || (managerRole && viewerIsAbove))
 
   const [person, setPerson] = useState<PersonDetail | null>(null)
   const [notes, setNotes] = useState<Note[]>([])
@@ -118,6 +127,25 @@ export function PersonPanel({ personId, session, profile, onClose, onChanged }: 
     setSavedNotice(null)
     reload()
   }, [personId, reload])
+
+  // Manager roles: can they write on THIS person? (HQ altitude never needs it.)
+  useEffect(() => {
+    if (!managerRole || !user?.personId) {
+      setViewerIsAbove(false)
+      return
+    }
+    let cancelled = false
+    fetchViewerIsAbove(user.personId, personId)
+      .then((above) => {
+        if (!cancelled) setViewerIsAbove(above)
+      })
+      .catch(() => {
+        if (!cancelled) setViewerIsAbove(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [personId, managerRole, user?.personId])
 
   const currentPrimary = person?.position_assignments.find(
     (a) => a.is_primary && !a.ended_on,

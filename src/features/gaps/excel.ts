@@ -4,10 +4,11 @@
 
 export interface GapXlsxRow {
   position_name: string
-  required_count: number
+  required_count: number | string // pool members: '2 min' or '—'
   current: number
-  gap: number
+  gap: number | string // number → formatted short/OK; a string passes through
   names: string[]
+  indent?: boolean // pool members sit indented under their pool header
 }
 
 export interface CompanyGapXlsxRow {
@@ -40,10 +41,10 @@ export async function downloadGapXlsx(opts: {
     [],
     ['Role', 'Required', currentLabel, 'Gap', opts.upcoming ? 'Slated' : 'People'],
     ...opts.rows.map((r) => [
-      r.position_name,
+      (r.indent ? '    ' : '') + r.position_name,
       r.required_count,
       r.current,
-      r.gap > 0 ? `short ${r.gap}` : 'OK',
+      typeof r.gap === 'number' ? (r.gap > 0 ? `short ${r.gap}` : 'OK') : r.gap,
       r.names.join(', ') || (opts.upcoming ? 'not yet named' : '—'),
     ]),
     [

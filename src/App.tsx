@@ -10,6 +10,7 @@ import { OrgChartView } from './features/org/OrgChartView'
 import { UpcomingView } from './features/upcoming/UpcomingView'
 import { GapView } from './features/gaps/GapView'
 import { BenchView } from './features/bench/BenchView'
+import { CoverageView } from './features/coverage/CoverageView'
 import { can, toPermissionUser } from './permissions'
 
 // Lazy: the sync pipeline (and its xlsx parser) only loads for admins who
@@ -43,7 +44,8 @@ export default function App() {
   const guarded =
     (view === 'data_sources' && !can(user, 'view', 'data_sources')) ||
     (view === 'bench' && !can(user, 'view', 'bench')) ||
-    (view === 'gaps' && !can(user, 'view', 'bench')) ||
+    (view === 'gaps' && !can(user, 'view', 'gap_analysis')) ||
+    (view === 'coverage' && !can(user, 'view', 'user_scopes')) ||
     (view === 'users' && !can(user, 'view', 'admin_area'))
   const effectiveView: View = guarded ? 'directory' : view
 
@@ -76,6 +78,8 @@ export default function App() {
         <GapView session={session} profile={profile} />
       ) : effectiveView === 'bench' ? (
         <BenchView session={session} profile={profile} />
+      ) : effectiveView === 'coverage' ? (
+        <CoverageView session={session} profile={profile} />
       ) : (
         <DirectoryView session={session} profile={profile} isAdmin={user?.role === 'admin'} />
       )}

@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import type { Session } from '@supabase/supabase-js'
 import { AlertTriangle, Plus, Trash2, Users } from 'lucide-react'
 import { actorFrom } from '../../lib/activity'
+import { errText } from '../../lib/errText'
 import { fetchReferenceOptions, type ReferenceOption } from '../people/api'
 import type { UserProfile } from '../../types'
 import {
@@ -16,6 +17,7 @@ import {
   deleteSlot,
   fetchConversationStaleness,
   fetchCoverageGrid,
+  fetchCoveredLocationIds,
   fetchPeopleOptions,
   fetchPeopleStats,
   fetchSlots,
@@ -47,6 +49,12 @@ interface BenchViewProps {
 
 export function BenchView({ session, profile }: BenchViewProps) {
   const actor = actorFrom(profile, session)
+  // Editing is region-scoped: executives/admins edit any seat; a Regional Ops
+  // Leader edits only seats in the region(s) they lead (mirrors the RLS write
+  // policies gated by people_center_covers_location). Reads are company-wide.
+  const role = profile?.role
+  const isPrivileged = role === 'admin' || role === 'executive'
+  const [coveredIds, setCoveredIds] = useState<Set<string>>(new Set())
   const [slots, setSlots] = useState<SuccessionSlot[]>([])
   const [grid, setGrid] = useState<CoverageGrid | null>(null)
   const [staleness, setStaleness] = useState<ConversationStaleness | null>(null)
@@ -73,7 +81,7 @@ export function BenchView({ session, profile }: BenchViewProps) {
         setPeople(po)
         setOptions(refs)
       })
-      .catch((e: Error) => setError(e.message))
+      .catch((e) => setError(errText(e)))
       .finally(() => setLoading(false))
   }, [])
 
@@ -81,13 +89,41 @@ export function BenchView({ session, profile }: BenchViewProps) {
     load()
   }, [load])
 
+  // A ROL's covered locations (the ones they may edit). Executives/admins edit
+  // everything, so we only need this for regional_leader.
+  useEffect(() => {
+    if (role === 'regional_leader' && profile?.person_id) {
+      fetchCoveredLocationIds(profile.person_id)
+        .then((ids) => setCoveredIds(new Set(ids)))
+        .catch((e) => setError(errText(e)))
+    }
+  }, [role, profile?.person_id])
+
+  const canEditSlot = useCallback(
+    (slot: SuccessionSlot) =>
+      isPrivileged ||
+      (role === 'regional_leader' && !!slot.location_id && coveredIds.has(slot.location_id)),
+    [isPrivileged, role, coveredIds],
+  )
+  const canCreate = isPrivileged || (role === 'regional_leader' && coveredIds.size > 0)
+  // "Plan a seat" only offers locations the user may actually write to.
+  const formOptions = useMemo(() => {
+    if (!options || isPrivileged) return options
+    return { ...options, locations: options.locations.filter((l) => coveredIds.has(l.id)) }
+  }, [options, isPrivileged, coveredIds])
+
   // Seat incumbents by location × position: an upcoming location's
-  // already-hired GM/Chef shows as "(incoming)" until Push assigns them.
+  // already-hired GM/Chef shows as "(incoming)" until Push assigns them. A
+  // location can have several seats for the same role (e.g. 3 Sous), so this
+  // collects ALL incumbent names per cell, de-duped.
   const incomingByCell = useMemo(() => {
-    const map = new Map<string, string>()
+    const map = new Map<string, string[]>()
     for (const s of slots) {
       if (s.location_id && s.positions?.name && s.incumbent?.full_name) {
-        map.set(`${s.location_id}|${s.positions.name}`, s.incumbent.full_name)
+        const k = `${s.location_id}|${s.positions.name}`
+        const arr = map.get(k) ?? []
+        if (!arr.includes(s.incumbent.full_name)) arr.push(s.incumbent.full_name)
+        map.set(k, arr)
       }
     }
     return map
@@ -197,17 +233,23 @@ export function BenchView({ session, profile }: BenchViewProps) {
         <h2 className="mb-1 text-sm font-semibold">Succession planning</h2>
         <p className="mb-4 text-xs text-charcoal/50">
           One seat per key position per location or region. Coverage is
-          computed from ranked successors. Visible to executives and admins
-          only.
+          computed from ranked successors.
+          {isPrivileged
+            ? ' Editable by executives and admins.'
+            : role === 'regional_leader'
+              ? ' You can edit seats for locations in your region; the rest is read-only.'
+              : ' Read-only view.'}
         </p>
-        <NewSlotForm
-          options={options}
-          people={people}
-          onCreate={async (positionId, locationId, incumbentId, label) => {
-            await createSlot(actor, positionId, locationId, null, incumbentId, label)
-            load()
-          }}
-        />
+        {canCreate && (
+          <NewSlotForm
+            options={formOptions}
+            people={people}
+            onCreate={async (positionId, locationId, incumbentId, label) => {
+              await createSlot(actor, positionId, locationId, null, incumbentId, label)
+              load()
+            }}
+          />
+        )}
         {slots.length === 0 ? (
           <p className="mt-3 text-sm text-charcoal/50">
             No seats planned yet — start with the 16 General Manager seats.
@@ -219,6 +261,7 @@ export function BenchView({ session, profile }: BenchViewProps) {
                 key={s.id}
                 slot={s}
                 people={people}
+                canEdit={canEditSlot(s)}
                 onSetIncumbent={async (personId) => {
                   await setSlotIncumbent(actor, s.id, personId, slotLabel(s))
                   load()
@@ -282,7 +325,7 @@ function PipelineTable({
   group: 'foh' | 'boh'
   positions: PositionColumn[]
   grid: CoverageGrid
-  incomingByCell: Map<string, string>
+  incomingByCell: Map<string, string[]>
   successorsByLocation: Map<string, string[]>
 }) {
   if (positions.length === 0) return null
@@ -314,20 +357,26 @@ function PipelineTable({
                 {positions.map((p) => {
                   const key = `${l.id}|${p.name}`
                   const names = grid.occupants[key] ?? []
-                  const incoming = incomingByCell.get(key)
+                  // Incoming incumbents not already sitting in the seat today.
+                  const incoming = (incomingByCell.get(key) ?? []).filter(
+                    (n) => !names.includes(n) && !names.includes(`${n} (incoming)`),
+                  )
                   return (
                     <td key={p.id} className="px-3 py-2 text-charcoal/80">
                       {names.length > 0 ? (
                         <>
                           {names.join(', ')}
-                          {incoming &&
-                            !names.includes(incoming) &&
-                            !names.includes(`${incoming} (incoming)`) && (
-                              <span className="text-info"> · {incoming} (incoming)</span>
-                            )}
+                          {incoming.length > 0 && (
+                            <span className="text-info">
+                              {' · '}
+                              {incoming.map((n) => `${n} (incoming)`).join(', ')}
+                            </span>
+                          )}
                         </>
-                      ) : incoming ? (
-                        <span className="text-info">{incoming} (incoming)</span>
+                      ) : incoming.length > 0 ? (
+                        <span className="text-info">
+                          {incoming.map((n) => `${n} (incoming)`).join(', ')}
+                        </span>
                       ) : p.isKey ? (
                         <Missing />
                       ) : (
@@ -425,7 +474,7 @@ function NewSlotForm({
       setLocationId('')
       setIncumbentId('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(errText(err))
     } finally {
       setSaving(false)
     }
@@ -470,6 +519,7 @@ function NewSlotForm({
 function SlotCard({
   slot,
   people,
+  canEdit,
   onSetIncumbent,
   onAddCandidate,
   onRemoveCandidate,
@@ -477,6 +527,7 @@ function SlotCard({
 }: {
   slot: SuccessionSlot
   people: PersonOption[]
+  canEdit: boolean
   onSetIncumbent: (personId: string | null) => Promise<void>
   onAddCandidate: (personId: string, rank: number) => Promise<void>
   onRemoveCandidate: (candidateId: string) => Promise<void>
@@ -493,14 +544,18 @@ function SlotCard({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="text-sm font-medium">{slotLabel(slot)}</p>
-          {editingIncumbent ? (
+          {!canEdit ? (
+            <p className="text-xs text-charcoal/50">
+              Incumbent: {slot.incumbent?.full_name ?? 'vacant'}
+            </p>
+          ) : editingIncumbent ? (
             <select
               autoFocus
               value={slot.incumbent_person_id ?? ''}
               onChange={(e) => {
                 setEditingIncumbent(false)
-                onSetIncumbent(e.target.value || null).catch((err: Error) =>
-                  setError(err.message),
+                onSetIncumbent(e.target.value || null).catch((err) =>
+                  setError(errText(err)),
                 )
               }}
               onBlur={() => setEditingIncumbent(false)}
@@ -527,10 +582,12 @@ function SlotCard({
         </div>
         <div className="flex items-center gap-2">
           <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${cov.cls}`}>{cov.label}</span>
-          <button onClick={() => void onDelete()} aria-label="Delete seat"
-            className="rounded p-1 text-charcoal/40 hover:text-danger">
-            <Trash2 className="h-4 w-4" />
-          </button>
+          {canEdit && (
+            <button onClick={() => void onDelete()} aria-label="Delete seat"
+              className="rounded p-1 text-charcoal/40 hover:text-danger">
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
       {slot.candidates.length > 0 && (
@@ -540,39 +597,43 @@ function SlotCard({
               <span className="w-5 text-xs text-charcoal/40">#{c.rank}</span>
               <Users className="h-3.5 w-3.5 text-charcoal/40" />
               {c.people?.full_name ?? c.person_id}
-              <button
-                onClick={() => onRemoveCandidate(c.id).catch((e: Error) => setError(e.message))}
-                aria-label="Remove candidate"
-                className="rounded p-0.5 text-charcoal/30 hover:text-danger"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
+              {canEdit && (
+                <button
+                  onClick={() => onRemoveCandidate(c.id).catch((e) => setError(errText(e)))}
+                  aria-label="Remove candidate"
+                  className="rounded p-0.5 text-charcoal/30 hover:text-danger"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              )}
             </li>
           ))}
         </ol>
       )}
-      <div className="mt-2 flex items-center gap-2">
-        <select value={candidateId} onChange={(e) => setCandidateId(e.target.value)}
-          className="rounded-md border border-surface-line bg-surface px-2 py-1 text-xs">
-          <option value="">— add successor —</option>
-          {people
-            .filter((p) => !slot.candidates.some((c) => c.person_id === p.id))
-            .map((p) => (
-              <option key={p.id} value={p.id}>{p.full_name}</option>
-            ))}
-        </select>
-        <button
-          disabled={!candidateId}
-          onClick={() =>
-            onAddCandidate(candidateId, nextRank)
-              .then(() => setCandidateId(''))
-              .catch((e: Error) => setError(e.message))
-          }
-          className="rounded-md border border-surface-line px-2 py-1 text-xs hover:bg-surface-muted disabled:opacity-40"
-        >
-          Add at #{nextRank}
-        </button>
-      </div>
+      {canEdit && (
+        <div className="mt-2 flex items-center gap-2">
+          <select value={candidateId} onChange={(e) => setCandidateId(e.target.value)}
+            className="rounded-md border border-surface-line bg-surface px-2 py-1 text-xs">
+            <option value="">— add successor —</option>
+            {people
+              .filter((p) => !slot.candidates.some((c) => c.person_id === p.id))
+              .map((p) => (
+                <option key={p.id} value={p.id}>{p.full_name}</option>
+              ))}
+          </select>
+          <button
+            disabled={!candidateId}
+            onClick={() =>
+              onAddCandidate(candidateId, nextRank)
+                .then(() => setCandidateId(''))
+                .catch((e) => setError(errText(e)))
+            }
+            className="rounded-md border border-surface-line px-2 py-1 text-xs hover:bg-surface-muted disabled:opacity-40"
+          >
+            Add at #{nextRank}
+          </button>
+        </div>
+      )}
       {error && <p className="mt-1 text-xs text-danger">{error}</p>}
     </li>
   )

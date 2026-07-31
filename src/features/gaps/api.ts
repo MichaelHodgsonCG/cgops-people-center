@@ -6,53 +6,105 @@
 
 import { supabase } from '../../lib/supabase'
 import { recordAudit, type Actor } from '../../lib/activity'
+import { errText } from '../../lib/errText'
 import { addPerson } from '../people/api'
 import { createSlot, setSlotIncumbent } from '../bench/api'
 import type { ResolvedAssignment } from './importXlsx'
 
 export interface RoleRequirement {
+  id: string
   position_id: string
   position_name: string
   level: number | null
   required_count: number
+  location_id: string | null // null = global default; else a per-location override
 }
 
 interface RawReq {
+  id: string
   position_id: string
   required_count: number
+  location_id: string | null
   positions: { name: string; level: number | null } | null
 }
 
+/** ALL single-role requirement rows — global defaults (location_id null) and
+ * per-location overrides. Callers resolve the effective set per location with
+ * resolveSingleRequirements(). */
 export async function fetchRoleRequirements(): Promise<RoleRequirement[]> {
   const { data, error } = await supabase
     .from('people_center_role_requirements')
-    .select('position_id, required_count, positions:people_center_positions ( name, level )')
+    .select('id, position_id, required_count, location_id, positions:people_center_positions ( name, level )')
   if (error) throw error
   return ((data as unknown as RawReq[]) ?? [])
     .map((r) => ({
+      id: r.id,
       position_id: r.position_id,
       required_count: r.required_count,
+      location_id: r.location_id,
       position_name: r.positions?.name ?? '?',
       level: r.positions?.level ?? null,
     }))
     .sort((a, b) => (a.level ?? Infinity) - (b.level ?? Infinity))
 }
 
+/** Set a required count. locationId null writes the global default; a location
+ * id writes (or updates) that location's override for the role. */
 export async function setRoleRequirement(
   actor: Actor,
   positionId: string,
   positionName: string,
   count: number,
+  locationId: string | null = null,
 ): Promise<void> {
-  const { error } = await supabase.from('people_center_role_requirements').upsert(
-    {
+  const sel = supabase
+    .from('people_center_role_requirements')
+    .select('id')
+    .eq('position_id', positionId)
+    .limit(1)
+  const { data: existing, error: selErr } = await (locationId === null
+    ? sel.is('location_id', null)
+    : sel.eq('location_id', locationId))
+  if (selErr) throw selErr
+  if (existing && existing.length > 0) {
+    const { error } = await supabase
+      .from('people_center_role_requirements')
+      .update({ required_count: count, updated_by: actor.personId, updated_by_name: actor.name })
+      .eq('id', (existing[0] as { id: string }).id)
+    if (error) throw error
+  } else {
+    const { error } = await supabase.from('people_center_role_requirements').insert({
       position_id: positionId,
       required_count: count,
+      location_id: locationId,
       updated_by: actor.personId,
       updated_by_name: actor.name,
-    },
-    { onConflict: 'position_id' },
+    })
+    if (error) throw error
+  }
+  await recordAudit(
+    actor,
+    'update',
+    'role_requirement',
+    positionId,
+    positionName,
+    `Required count for ${positionName}${locationId ? ' (location override)' : ''} set to ${count}`,
   )
+}
+
+/** Remove a location's override for a role, so it falls back to the global
+ * default again. */
+export async function clearRoleRequirement(
+  actor: Actor,
+  positionId: string,
+  positionName: string,
+  locationId: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from('people_center_role_requirements')
+    .delete()
+    .eq('position_id', positionId)
+    .eq('location_id', locationId)
   if (error) throw error
   await recordAudit(
     actor,
@@ -60,7 +112,7 @@ export async function setRoleRequirement(
     'role_requirement',
     positionId,
     positionName,
-    `Required count for ${positionName} set to ${count}`,
+    `Location override for ${positionName} removed (back to global)`,
   )
 }
 
@@ -70,24 +122,191 @@ export interface MgmtPosition {
   level: number | null
 }
 
-/** The restaurant management roster (manager + eligible) — the roles the
- * requirements editor lets you set counts for. */
+/** The restaurant roster ladder — every in-restaurant role (GM=10 down to
+ * Chef de Partie=50), which is level >= 10; corporate roles are <= 7. This is
+ * the set the requirements editor + group builder can pick from, so line roles
+ * like Supervisor and Chef de Partie can now be part of the gap analysis. */
 export async function fetchManagementPositions(): Promise<MgmtPosition[]> {
   const { data, error } = await supabase
     .from('people_center_positions')
-    .select('id, name, level, default_person_kind, people_center_eligible')
+    .select('id, name, level, show_in_people_center')
+  if (error) throw error
+  type Row = { id: string; name: string; level: number | null; show_in_people_center: boolean }
+  return ((data as unknown as Row[]) ?? [])
+    .filter((p) => p.show_in_people_center && p.level != null && p.level >= 10)
+    .map((p) => ({ id: p.id, name: p.name, level: p.level }))
+    .sort((a, b) => (a.level ?? Infinity) - (b.level ?? Infinity))
+}
+
+// --- Pooled requirement groups (e.g. kitchen line = 5, min 2 Sous) ----------
+
+export interface GroupRole {
+  position_id: string
+  position_name: string
+  level: number | null
+  min_count: number
+}
+export interface RequirementGroup {
+  id: string
+  name: string
+  total_min: number
+  location_id: string | null // null = global default; else a per-location pool
+  overrides_group_id: string | null // set when a location pool replaces a global one
+  roles: GroupRole[]
+}
+
+/** ALL pools — global (location_id null) and per-location. Callers resolve the
+ * effective set per location with resolveGroupRequirements(). */
+export async function fetchRequirementGroups(): Promise<RequirementGroup[]> {
+  const { data, error } = await supabase
+    .from('people_center_requirement_groups')
+    .select(
+      `id, name, total_min, sort_order, location_id, overrides_group_id,
+       roles:people_center_requirement_group_roles (
+         position_id, min_count, positions:people_center_positions ( name, level ) )`,
+    )
+    .order('sort_order')
   if (error) throw error
   type Row = {
     id: string
     name: string
-    level: number | null
-    default_person_kind: string
-    people_center_eligible: boolean
+    total_min: number
+    sort_order: number
+    location_id: string | null
+    overrides_group_id: string | null
+    roles: {
+      position_id: string
+      min_count: number
+      positions: { name: string; level: number | null } | null
+    }[]
   }
-  return ((data as unknown as Row[]) ?? [])
-    .filter((p) => p.default_person_kind === 'manager' && p.people_center_eligible)
-    .map((p) => ({ id: p.id, name: p.name, level: p.level }))
-    .sort((a, b) => (a.level ?? Infinity) - (b.level ?? Infinity))
+  return ((data as unknown as Row[]) ?? []).map((g) => ({
+    id: g.id,
+    name: g.name,
+    total_min: g.total_min,
+    location_id: g.location_id,
+    overrides_group_id: g.overrides_group_id,
+    roles: (g.roles ?? [])
+      .map((r) => ({
+        position_id: r.position_id,
+        position_name: r.positions?.name ?? '?',
+        level: r.positions?.level ?? null,
+        min_count: r.min_count,
+      }))
+      .sort((a, b) => (a.level ?? Infinity) - (b.level ?? Infinity)),
+  }))
+}
+
+export async function saveRequirementGroup(
+  actor: Actor,
+  group: {
+    id?: string
+    name: string
+    total_min: number
+    roles: { position_id: string; min_count: number }[]
+    location_id?: string | null
+    overrides_group_id?: string | null
+  },
+): Promise<void> {
+  let groupId = group.id
+  if (groupId) {
+    // Edit keeps the pool's scope (location_id / overrides_group_id) as-is.
+    const { error } = await supabase
+      .from('people_center_requirement_groups')
+      .update({ name: group.name, total_min: group.total_min, updated_by: actor.personId, updated_by_name: actor.name })
+      .eq('id', groupId)
+    if (error) throw error
+  } else {
+    const { data, error } = await supabase
+      .from('people_center_requirement_groups')
+      .insert({
+        name: group.name,
+        total_min: group.total_min,
+        location_id: group.location_id ?? null,
+        overrides_group_id: group.overrides_group_id ?? null,
+        updated_by: actor.personId,
+        updated_by_name: actor.name,
+      })
+      .select('id')
+    if (error) throw error
+    groupId = data![0].id as string
+  }
+  // Replace the group's roles wholesale.
+  await supabase.from('people_center_requirement_group_roles').delete().eq('group_id', groupId)
+  if (group.roles.length > 0) {
+    const { error } = await supabase.from('people_center_requirement_group_roles').insert(
+      group.roles.map((r) => ({ group_id: groupId, position_id: r.position_id, min_count: r.min_count })),
+    )
+    if (error) throw error
+  }
+  await recordAudit(actor, group.id ? 'update' : 'create', 'requirement_group', groupId ?? null, group.name,
+    `Group "${group.name}" = ${group.total_min} total across ${group.roles.length} role(s)`)
+}
+
+export async function deleteRequirementGroup(actor: Actor, id: string, name: string): Promise<void> {
+  const { error } = await supabase.from('people_center_requirement_groups').delete().eq('id', id)
+  if (error) throw error
+  await recordAudit(actor, 'delete', 'requirement_group', id, name, `Deleted group "${name}"`)
+}
+
+// --- Per-location resolution: global default + overrides, most-specific wins --
+
+/** Effective single-role requirements at a location: the global row for each
+ * position, replaced by this location's override where one exists. Pass a null
+ * locationId to get the global defaults alone. */
+export function resolveSingleRequirements(
+  all: RoleRequirement[],
+  locationId: string | null,
+): RoleRequirement[] {
+  const byPos = new Map<string, RoleRequirement>()
+  for (const r of all) if (r.location_id === null) byPos.set(r.position_id, r)
+  if (locationId !== null) {
+    for (const r of all) if (r.location_id === locationId) byPos.set(r.position_id, r)
+  }
+  return [...byPos.values()].sort((a, b) => (a.level ?? Infinity) - (b.level ?? Infinity))
+}
+
+/** Effective pools at a location: global pools that this location hasn't
+ * overridden, plus this location's own pools (overrides + location-only adds).
+ * Pass a null locationId to get the global pools alone. */
+export function resolveGroupRequirements(
+  all: RequirementGroup[],
+  locationId: string | null,
+): RequirementGroup[] {
+  if (locationId === null) return all.filter((g) => g.location_id === null)
+  const locGroups = all.filter((g) => g.location_id === locationId)
+  const overridden = new Set(
+    locGroups.map((g) => g.overrides_group_id).filter((x): x is string => x !== null),
+  )
+  const globals = all.filter((g) => g.location_id === null && !overridden.has(g.id))
+  return [...globals, ...locGroups]
+}
+
+/** Gap for one pooled group given how many of each role are filled:
+ *  max( total_min − filledTotal,  Σ per-role min shortfalls ). */
+export function groupGap(
+  group: RequirementGroup,
+  filledByPosition: Map<string, number>,
+): { gap: number; filledTotal: number; detail: string } {
+  let filledTotal = 0
+  let minShort = 0
+  const parts: string[] = []
+  for (const r of group.roles) {
+    const f = filledByPosition.get(r.position_id) ?? 0
+    filledTotal += f
+    if (r.min_count > 0) {
+      minShort += Math.max(0, r.min_count - f)
+      parts.push(`${r.position_name} ${f}/${r.min_count} min`)
+    } else {
+      parts.push(`${r.position_name} ${f}`)
+    }
+  }
+  const totalShort = Math.max(0, group.total_min - filledTotal)
+  return {
+    gap: Math.max(totalShort, minShort),
+    filledTotal,
+    detail: `have ${filledTotal}/${group.total_min}${parts.length ? ` · ${parts.join(', ')}` : ''}`,
+  }
 }
 
 export interface GapLocation {
@@ -109,9 +328,13 @@ export async function fetchGapLocations(): Promise<GapLocation[]> {
 export type GapReason = 'new-site' | 'backfill' | 'understaffed'
 
 export interface CompanyGap {
+  location_id: string
   location_name: string
   location_status: 'open' | 'opening'
-  position_name: string
+  kind: 'role' | 'group'
+  position_id: string // role: the position id; group: the group id
+  position_name: string // role: role name; group: group name
+  member_position_ids?: string[] // group only — its roles, for role-filtering
   level: number | null
   required: number
   projected: number
@@ -126,8 +349,9 @@ export interface CompanyGap {
  * slated), backfill (open site losing someone to a new site), understaffed
  * (open site already below the required roster). */
 export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
-  const [reqs, locs, assignRes, slotRes] = await Promise.all([
+  const [reqs, groups, locs, assignRes, slotRes] = await Promise.all([
     fetchRoleRequirements(),
+    fetchRequirementGroups(),
     fetchGapLocations(),
     supabase
       .from('people_center_position_assignments')
@@ -149,7 +373,6 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
   if (assignRes.error) throw assignRes.error
   if (slotRes.error) throw slotRes.error
 
-  const required = reqs.filter((r) => r.required_count > 0)
   const key = (locId: string, posId: string) => `${locId}|${posId}`
 
   // Current seats at OPEN locations, and everyone's origin (person → their seat).
@@ -159,13 +382,25 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
     location: { id: string; status: string } | null
   }
   const curByCell = new Map<string, { id: string; name: string }[]>()
+  // Incoming/active external hires assigned to an OPENING site — they belong on
+  // that site's future roster alongside slated leaders (unioned + de-duped by
+  // person below), so the "add incoming hire" flow works for upcoming sites.
+  const openingAsgByCell = new Map<string, { id: string; name: string }[]>()
   for (const a of (assignRes.data as unknown as A[]) ?? []) {
-    if (!a.position_id || !a.location || a.location.status !== 'open') continue
-    if (!a.person || (a.person.status !== 'active' && a.person.status !== 'leave')) continue
+    if (!a.position_id || !a.location || !a.person) continue
     const k = key(a.location.id, a.position_id)
-    const arr = curByCell.get(k) ?? []
-    arr.push({ id: a.person.id, name: a.person.full_name })
-    curByCell.set(k, arr)
+    if (a.location.status === 'open') {
+      if (a.person.status !== 'active' && a.person.status !== 'leave') continue
+      const arr = curByCell.get(k) ?? []
+      arr.push({ id: a.person.id, name: a.person.full_name })
+      curByCell.set(k, arr)
+    } else if (a.location.status === 'opening') {
+      const st = a.person.status
+      if (st !== 'incoming' && st !== 'active' && st !== 'leave') continue
+      const arr = openingAsgByCell.get(k) ?? []
+      arr.push({ id: a.person.id, name: a.person.full_name })
+      openingAsgByCell.set(k, arr)
+    }
   }
 
   // Slated leaders at OPENING locations → the future fill there, and the set of
@@ -176,36 +411,69 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
     incumbent: { full_name: string } | null
     location: { id: string; name: string; status: string } | null
   }
-  const slatedByCell = new Map<string, string[]>()
+  const slatedByCell = new Map<string, { id: string; name: string }[]>()
   const moverDest = new Map<string, string>()
   for (const s of (slotRes.data as unknown as S[]) ?? []) {
     if (!s.position_id || !s.location || s.location.status !== 'opening') continue
     if (!s.incumbent_person_id || !s.incumbent) continue
     const k = key(s.location.id, s.position_id)
     const arr = slatedByCell.get(k) ?? []
-    arr.push(s.incumbent.full_name)
+    arr.push({ id: s.incumbent_person_id, name: s.incumbent.full_name })
     slatedByCell.set(k, arr)
     moverDest.set(s.incumbent_person_id, s.location.name)
   }
 
+  // Projected fill of one (location, position): open → current staff minus
+  // movers; opening → slated ∪ incoming, de-duped by person. Shared by the
+  // single-role rows and the group evaluation.
+  const projectedFill = (loc: GapLocation, positionId: string): number => {
+    const k = key(loc.id, positionId)
+    if (loc.status === 'opening') {
+      const ids = new Set<string>()
+      for (const p of slatedByCell.get(k) ?? []) ids.add(p.id)
+      for (const p of openingAsgByCell.get(k) ?? []) ids.add(p.id)
+      return ids.size
+    }
+    const cur = curByCell.get(k) ?? []
+    return cur.length - cur.filter((p) => moverDest.has(p.id)).length
+  }
+
   const out: CompanyGap[] = []
   for (const loc of locs) {
+    // Effective roster for THIS location: global defaults overlaid with the
+    // location's own overrides (most-specific wins). A role owned by a pool is
+    // not also counted as a single role, so we don't double-count.
+    const locGroups = resolveGroupRequirements(groups, loc.id)
+    const memberPos = new Set<string>()
+    for (const g of locGroups) for (const r of g.roles) memberPos.add(r.position_id)
+    const required = resolveSingleRequirements(reqs, loc.id).filter(
+      (r) => r.required_count > 0 && !memberPos.has(r.position_id),
+    )
+
     for (const r of required) {
       const k = key(loc.id, r.position_id)
       if (loc.status === 'opening') {
-        const slated = slatedByCell.get(k) ?? []
-        const gap = Math.max(0, r.required_count - slated.length)
+        // Future roster = slated leaders ∪ incoming/active hires assigned here,
+        // de-duped by person (someone both slated and assigned counts once).
+        const byId = new Map<string, string>()
+        for (const p of slatedByCell.get(k) ?? []) byId.set(p.id, p.name)
+        for (const p of openingAsgByCell.get(k) ?? []) byId.set(p.id, p.name)
+        const names = [...byId.values()]
+        const gap = Math.max(0, r.required_count - byId.size)
         if (gap > 0) {
           out.push({
+            location_id: loc.id,
             location_name: loc.name,
             location_status: 'opening',
+            kind: 'role',
+            position_id: r.position_id,
             position_name: r.position_name,
             level: r.level,
             required: r.required_count,
-            projected: slated.length,
+            projected: byId.size,
             gap,
             reason: 'new-site',
-            detail: slated.length ? `slated: ${slated.join(', ')}` : '',
+            detail: names.length ? `named: ${names.join(', ')}` : '',
           })
         }
       } else {
@@ -215,8 +483,11 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
         const gap = Math.max(0, r.required_count - projected)
         if (gap > 0) {
           out.push({
+            location_id: loc.id,
             location_name: loc.name,
             location_status: 'open',
+            kind: 'role',
+            position_id: r.position_id,
             position_name: r.position_name,
             level: r.level,
             required: r.required_count,
@@ -226,6 +497,31 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
             detail: movers.map((m) => `${m.name} → ${moverDest.get(m.id)}`).join(', '),
           })
         }
+      }
+    }
+
+    // Pooled group requirements for this location.
+    for (const g of locGroups) {
+      if (g.roles.length === 0) continue
+      const filledByPos = new Map<string, number>()
+      for (const gr of g.roles) filledByPos.set(gr.position_id, projectedFill(loc, gr.position_id))
+      const { gap, filledTotal, detail } = groupGap(g, filledByPos)
+      if (gap > 0) {
+        out.push({
+          location_id: loc.id,
+          location_name: loc.name,
+          location_status: loc.status === 'opening' ? 'opening' : 'open',
+          kind: 'group',
+          position_id: g.id,
+          position_name: g.name,
+          member_position_ids: g.roles.map((r) => r.position_id),
+          level: Math.min(...g.roles.map((r) => r.level ?? Infinity)),
+          required: g.total_min,
+          projected: filledTotal,
+          gap,
+          reason: loc.status === 'opening' ? 'new-site' : 'understaffed',
+          detail,
+        })
       }
     }
   }
@@ -261,17 +557,50 @@ export async function fetchFillForLocation(
   }
 
   if (upcoming) {
-    const { data, error } = await supabase
-      .from('people_center_succession_slots')
-      .select(
-        `position_id,
-         incumbent:people_center_people!people_center_succession_slots_incumbent_person_id_fkey ( full_name )`,
-      )
-      .eq('location_id', locationId)
-    if (error) throw error
-    type Row = { position_id: string | null; incumbent: { full_name: string } | null }
-    for (const r of (data as unknown as Row[]) ?? []) {
-      if (r.incumbent?.full_name) add(r.position_id, r.incumbent.full_name)
+    // Opening-site roster = slated leaders (succession incumbents) UNION
+    // incoming/active external hires assigned to the site (the "add incoming
+    // hire" flow), de-duped by person so someone both slated and assigned
+    // counts once. Before opening, the whole roster is a future fill, so an
+    // incoming hire assigned here belongs on it just like a slated leader.
+    const seen = new Map<string, Set<string>>() // position_id -> person ids
+    const addUnique = (positionId: string | null, personId: string | null, name: string | null) => {
+      if (!positionId || !personId) return
+      const s = seen.get(positionId) ?? new Set<string>()
+      if (s.has(personId)) return
+      s.add(personId)
+      seen.set(positionId, s)
+      add(positionId, name)
+    }
+    const [slotRes, asgRes] = await Promise.all([
+      supabase
+        .from('people_center_succession_slots')
+        .select(
+          `position_id,
+           incumbent:people_center_people!people_center_succession_slots_incumbent_person_id_fkey ( id, full_name )`,
+        )
+        .eq('location_id', locationId),
+      supabase
+        .from('people_center_position_assignments')
+        .select(`position_id, ended_on, person:people_center_people ( id, full_name, status )`)
+        .eq('location_id', locationId)
+        .eq('is_primary', true)
+        .is('ended_on', null),
+    ])
+    if (slotRes.error) throw slotRes.error
+    if (asgRes.error) throw asgRes.error
+    type SlotRow = { position_id: string | null; incumbent: { id: string; full_name: string } | null }
+    for (const r of (slotRes.data as unknown as SlotRow[]) ?? []) {
+      if (r.incumbent?.id) addUnique(r.position_id, r.incumbent.id, r.incumbent.full_name)
+    }
+    type AsgRow = {
+      position_id: string | null
+      person: { id: string; full_name: string; status: string } | null
+    }
+    for (const r of (asgRes.data as unknown as AsgRow[]) ?? []) {
+      const st = r.person?.status
+      if (r.person && (st === 'incoming' || st === 'active' || st === 'leave')) {
+        addUnique(r.position_id, r.person.id, r.person.full_name)
+      }
     }
     return map
   }
@@ -302,18 +631,33 @@ export async function fetchFillForLocation(
 
 // --- Excel round-trip: apply filled-in assignments as slated leaders ---------
 
-/** Existing succession seats keyed `${locationId}|${positionId}` → slot id, so
- * an import updates the seat's incumbent instead of colliding with the
- * one-seat-per-role unique index. */
-export async function fetchSlotIndex(): Promise<Map<string, string>> {
+export interface SeatRef {
+  id: string
+  incumbentPersonId: string | null
+}
+
+/** Existing succession seats grouped by `${locationId}|${positionId}` → a LIST
+ * (a location can have several seats for the same role, e.g. 3 Sous). On import
+ * we fill VACANT seats first and create new ones as needed, never overwriting a
+ * seat already held by someone else. */
+export async function fetchSlotIndex(): Promise<Map<string, SeatRef[]>> {
   const { data, error } = await supabase
     .from('people_center_succession_slots')
-    .select('id, position_id, location_id')
+    .select('id, position_id, location_id, incumbent_person_id')
   if (error) throw error
-  type Row = { id: string; position_id: string; location_id: string | null }
-  const m = new Map<string, string>()
+  type Row = {
+    id: string
+    position_id: string
+    location_id: string | null
+    incumbent_person_id: string | null
+  }
+  const m = new Map<string, SeatRef[]>()
   for (const s of (data as unknown as Row[]) ?? []) {
-    if (s.location_id) m.set(`${s.location_id}|${s.position_id}`, s.id)
+    if (!s.location_id) continue
+    const k = `${s.location_id}|${s.position_id}`
+    const arr = m.get(k) ?? []
+    arr.push({ id: s.id, incumbentPersonId: s.incumbent_person_id })
+    m.set(k, arr)
   }
   return m
 }
@@ -341,9 +685,15 @@ export interface ApplyResult {
 export async function applyAssignments(
   actor: Actor,
   items: ResolvedAssignment[],
-  slotIndex: Map<string, string>,
+  slotIndex: Map<string, SeatRef[]>,
 ): Promise<ApplyResult> {
   const res: ApplyResult = { created: 0, linked: 0, slotsSet: 0, errors: [] }
+  // Mutable working copy: consume vacant seats and append newly-created ones so
+  // several people for the same role land on SEPARATE seats (3 Sous → 3 seats)
+  // instead of overwriting one.
+  const seatsByKey = new Map<string, SeatRef[]>()
+  for (const [k, v] of slotIndex) seatsByKey.set(k, v.map((s) => ({ ...s })))
+
   for (const it of items) {
     if (it.action === 'error' || !it.locationId || !it.positionId) continue
     try {
@@ -367,14 +717,26 @@ export async function applyAssignments(
         res.linked++
       }
       const label = `${it.roleName} — ${it.locationName}`
-      const existing = slotIndex.get(`${it.locationId}|${it.positionId}`)
-      if (existing) await setSlotIncumbent(actor, existing, personId, label)
-      else await createSlot(actor, it.positionId, it.locationId, null, personId, label)
+      const k = `${it.locationId}|${it.positionId}`
+      const seats = seatsByKey.get(k) ?? []
+      // Already slated into a seat for this role → nothing to change.
+      if (seats.some((s) => s.incumbentPersonId === personId)) {
+        res.slotsSet++
+        continue
+      }
+      // Fill the first vacant seat; otherwise create a new one.
+      const vacant = seats.find((s) => s.incumbentPersonId === null)
+      if (vacant) {
+        await setSlotIncumbent(actor, vacant.id, personId, label)
+        vacant.incumbentPersonId = personId
+      } else {
+        await createSlot(actor, it.positionId, it.locationId, null, personId, label)
+        seats.push({ id: `new:${personId}`, incumbentPersonId: personId })
+        seatsByKey.set(k, seats)
+      }
       res.slotsSet++
     } catch (e) {
-      res.errors.push(
-        `${it.personName} → ${it.roleName} @ ${it.locationName}: ${e instanceof Error ? e.message : String(e)}`,
-      )
+      res.errors.push(`${it.personName} → ${it.roleName} @ ${it.locationName}: ${errText(e)}`)
     }
   }
   return res

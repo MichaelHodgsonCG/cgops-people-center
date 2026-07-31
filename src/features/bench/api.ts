@@ -30,6 +30,26 @@ export interface SuccessionSlot {
   candidates: SuccessionCandidate[]
 }
 
+// Locations a Regional Ops Leader may EDIT succession for — the sites in the
+// region(s) they lead. Mirrors the DB's people_center_covers_location (Phase 1)
+// so the UI only offers edit controls the RLS write policies will actually
+// allow. Reads stay company-wide; this gates writes only.
+export async function fetchCoveredLocationIds(personId: string): Promise<string[]> {
+  const { data: regs, error: e1 } = await supabase
+    .from('people_center_regions')
+    .select('id')
+    .eq('leader_person_id', personId)
+  if (e1) throw e1
+  const regionIds = (regs ?? []).map((r) => r.id as string)
+  if (regionIds.length === 0) return []
+  const { data: locs, error: e2 } = await supabase
+    .from('people_center_locations')
+    .select('id')
+    .in('region_id', regionIds)
+  if (e2) throw e2
+  return (locs ?? []).map((l) => l.id as string)
+}
+
 export async function fetchSlots(): Promise<SuccessionSlot[]> {
   const { data, error } = await supabase
     .from('people_center_succession_slots')

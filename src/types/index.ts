@@ -6,6 +6,7 @@ export const APP_ROLES = [
   'regional_leader',
   'location_leader',
   'viewer',
+  'hq_analyst',
 ] as const
 
 export type AppRole = (typeof APP_ROLES)[number]
@@ -17,6 +18,9 @@ export interface UserProfile {
   display_name: string | null
   role: AppRole
   person_id: string | null
+  // RBAC: when true (or role admin), the user sees every location, overriding
+  // region-derived + scope-grant coverage (people_center_can_view_all()).
+  can_view_all?: boolean
   created_at: string
   updated_at: string
   updated_by: string | null

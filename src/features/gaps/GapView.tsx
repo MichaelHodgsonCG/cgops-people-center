@@ -5,7 +5,7 @@
 //  - Single location: required roster vs who's in seat (open) / slated (opening).
 // Admin/executive can edit the required counts. Both modes export to Word (.docx).
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import {
   ArrowDown,
@@ -13,29 +13,39 @@ import {
   ChevronsUpDown,
   ClipboardList,
   Download,
+  Plus,
   Settings2,
+  Trash2,
   UploadCloud,
 } from 'lucide-react'
 import { ImportPanel } from './ImportPanel'
 import { actorFrom } from '../../lib/activity'
+import { errText } from '../../lib/errText'
 import {
+  deleteRequirementGroup,
   fetchCompanyGaps,
   fetchFillForLocation,
   fetchGapLocations,
   fetchManagementPositions,
+  fetchRequirementGroups,
   fetchRoleRequirements,
+  groupGap,
+  resolveGroupRequirements,
+  resolveSingleRequirements,
+  clearRoleRequirement,
+  saveRequirementGroup,
   setRoleRequirement,
   type CompanyGap,
   type Fill,
   type GapLocation,
   type GapReason,
   type MgmtPosition,
+  type RequirementGroup,
   type RoleRequirement,
 } from './api'
 import { downloadCompanyGapXlsx, downloadGapXlsx } from './excel'
+import { can, toPermissionUser } from '../../permissions'
 import type { UserProfile } from '../../types'
-
-const ALL = '__all__'
 
 const REASON_LABEL: Record<GapReason, string> = {
   'new-site': 'New site',
@@ -58,13 +68,20 @@ interface GapViewProps {
 
 export function GapView({ session, profile }: GapViewProps) {
   const actor = actorFrom(profile, session)
-  const canEdit = profile?.role === 'admin' || profile?.role === 'executive'
+  const canEdit = can(profile ? toPermissionUser(profile) : null, 'update', 'gap_analysis')
 
   const [reqs, setReqs] = useState<RoleRequirement[]>([])
+  const [groups, setGroups] = useState<RequirementGroup[]>([])
   const [mgmt, setMgmt] = useState<MgmtPosition[]>([])
   const [locations, setLocations] = useState<GapLocation[]>([])
   const [company, setCompany] = useState<CompanyGap[]>([])
-  const [selectedId, setSelectedId] = useState(ALL)
+  // Location selection: empty = all (company-wide); one = the detailed
+  // single-location view; two+ = the company report filtered to that subset.
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  // Role filter: empty = all roles; otherwise only these position_ids show
+  // (e.g. pick "Sous Chef" to see how many are needed across sites).
+  const [pickedRoles, setPickedRoles] = useState<Set<string>>(new Set())
+  const [openMenu, setOpenMenu] = useState<null | 'loc' | 'role'>(null)
   const [fill, setFill] = useState<Map<string, Fill>>(new Map())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -76,18 +93,21 @@ export function GapView({ session, profile }: GapViewProps) {
 
   const loadReqs = useCallback(() => {
     fetchRoleRequirements().then(setReqs).catch((e: Error) => setError(e.message))
+    fetchRequirementGroups().then(setGroups).catch((e: Error) => setError(e.message))
     fetchCompanyGaps().then(setCompany).catch((e: Error) => setError(e.message))
   }, [])
 
   useEffect(() => {
     Promise.all([
       fetchRoleRequirements(),
+      fetchRequirementGroups(),
       fetchManagementPositions(),
       fetchGapLocations(),
       fetchCompanyGaps(),
     ])
-      .then(([r, m, locs, c]) => {
+      .then(([r, g, m, locs, c]) => {
         setReqs(r)
+        setGroups(g)
         setMgmt(m)
         setLocations(locs)
         setCompany(c)
@@ -96,43 +116,133 @@ export function GapView({ session, profile }: GapViewProps) {
       .finally(() => setLoading(false))
   }, [])
 
-  const isAll = selectedId === ALL
-  const selected = locations.find((l) => l.id === selectedId)
+  const single = picked.size === 1 ? [...picked][0] : null
+  const isMulti = picked.size >= 2
+  const selected = single ? locations.find((l) => l.id === single) : undefined
   const upcoming = selected?.status === 'opening'
 
   useEffect(() => {
-    if (isAll || !selectedId || !selected) return
-    fetchFillForLocation(selectedId, selected.status === 'opening')
+    if (!single || !selected) return
+    fetchFillForLocation(single, selected.status === 'opening')
       .then(setFill)
       .catch((e: Error) => setError(e.message))
-  }, [isAll, selectedId, selected])
+  }, [single, selected])
+
+  function toggleLocation(id: string) {
+    setPicked((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  function toggleRole(id: string) {
+    setPickedRoles((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  function setManyLocations(ids: string[], on: boolean) {
+    setPicked((prev) => {
+      const next = new Set(prev)
+      ids.forEach((id) => (on ? next.add(id) : next.delete(id)))
+      return next
+    })
+  }
+  function setManyRoles(ids: string[], on: boolean) {
+    setPickedRoles((prev) => {
+      const next = new Set(prev)
+      ids.forEach((id) => (on ? next.add(id) : next.delete(id)))
+      return next
+    })
+  }
+
+  // The effective roster for the selected location: global defaults overlaid
+  // with this location's overrides (most-specific wins).
+  const effSingles = useMemo(() => resolveSingleRequirements(reqs, single), [reqs, single])
+  const effGroups = useMemo(() => resolveGroupRequirements(groups, single), [groups, single])
+
+  // Positions governed by a group are shown via the group, not as single roles.
+  const groupMemberPos = useMemo(() => {
+    const s = new Set<string>()
+    for (const g of effGroups) for (const r of g.roles) s.add(r.position_id)
+    return s
+  }, [effGroups])
 
   const rows = useMemo(() => {
-    return reqs
-      .filter((r) => r.required_count > 0)
+    return effSingles
+      .filter((r) => r.required_count > 0 && !groupMemberPos.has(r.position_id))
+      .filter((r) => pickedRoles.size === 0 || pickedRoles.has(r.position_id))
       .map((r) => {
         const f = fill.get(r.position_id) ?? { count: 0, names: [] }
         return { ...r, current: f.count, names: f.names, gap: Math.max(0, r.required_count - f.count) }
       })
-  }, [reqs, fill])
+  }, [effSingles, fill, pickedRoles, groupMemberPos])
+
+  // Group rows for the single-location table (fill comes from the location's
+  // per-position fill map). Each pool renders as a header row plus one row per
+  // member position, so members read like ordinary roles.
+  const groupRows = useMemo(() => {
+    return effGroups
+      .filter((g) => pickedRoles.size === 0 || g.roles.some((r) => pickedRoles.has(r.position_id)))
+      .map((g) => {
+        const filledByPos = new Map<string, number>()
+        for (const r of g.roles) {
+          filledByPos.set(r.position_id, (fill.get(r.position_id) ?? { count: 0, names: [] }).count)
+        }
+        const gg = groupGap(g, filledByPos)
+        const members = g.roles.map((r) => {
+          const f = fill.get(r.position_id) ?? { count: 0, names: [] }
+          return {
+            position_id: r.position_id,
+            position_name: r.position_name,
+            min_count: r.min_count,
+            current: f.count,
+            names: f.names,
+            gap: Math.max(0, r.min_count - f.count),
+          }
+        })
+        return { id: g.id, name: g.name, total_min: g.total_min, current: gg.filledTotal, gap: gg.gap, members }
+      })
+  }, [effGroups, fill, pickedRoles])
 
   const totals = useMemo(() => {
-    const required = rows.reduce((s, r) => s + r.required_count, 0)
-    const filled = rows.reduce((s, r) => s + Math.min(r.current, r.required_count), 0)
-    const gap = rows.reduce((s, r) => s + r.gap, 0)
+    const required =
+      rows.reduce((s, r) => s + r.required_count, 0) + groupRows.reduce((s, g) => s + g.total_min, 0)
+    const filled =
+      rows.reduce((s, r) => s + Math.min(r.current, r.required_count), 0) +
+      groupRows.reduce((s, g) => s + Math.min(g.current, g.total_min), 0)
+    const gap = rows.reduce((s, r) => s + r.gap, 0) + groupRows.reduce((s, g) => s + g.gap, 0)
     return { required, filled, gap }
-  }, [rows])
+  }, [rows, groupRows])
+
+  // Company-wide rows filtered to the picked subset (all when none picked).
+  // Backfill/movers are still computed company-wide in fetchCompanyGaps, so a
+  // subset view stays correct — we only filter what's shown.
+  const visibleCompany = useMemo(
+    () =>
+      company.filter((g) => {
+        if (isMulti && !picked.has(g.location_id)) return false
+        if (pickedRoles.size === 0) return true
+        return g.kind === 'group'
+          ? (g.member_position_ids ?? []).some((id) => pickedRoles.has(id))
+          : pickedRoles.has(g.position_id)
+      }),
+    [company, isMulti, picked, pickedRoles],
+  )
 
   const companyByReason = useMemo(() => {
     const m: Record<GapReason, number> = { 'new-site': 0, backfill: 0, understaffed: 0 }
-    for (const g of company) m[g.reason] += g.gap
+    for (const g of visibleCompany) m[g.reason] += g.gap
     return m
-  }, [company])
-  const companyTotal = company.reduce((s, g) => s + g.gap, 0)
+  }, [visibleCompany])
+  const companyTotal = visibleCompany.reduce((s, g) => s + g.gap, 0)
 
   const sortedCompany = useMemo(() => {
     const dir = sortDir === 'asc' ? 1 : -1
-    return [...company].sort((a, b) => {
+    return [...visibleCompany].sort((a, b) => {
       let cmp = 0
       switch (sortKey) {
         case 'location':
@@ -155,7 +265,7 @@ export function GapView({ session, profile }: GapViewProps) {
         (a.level ?? Infinity) - (b.level ?? Infinity)
       )
     })
-  }, [company, sortKey, sortDir])
+  }, [visibleCompany, sortKey, sortDir])
 
   function toggleSort(k: CompanySortKey) {
     if (sortKey === k) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -169,19 +279,38 @@ export function GapView({ session, profile }: GapViewProps) {
     setExporting(true)
     setError(null)
     try {
-      if (isAll) {
+      if (!single) {
         await downloadCompanyGapXlsx({ rows: sortedCompany, generatedOn: new Date().toLocaleDateString() })
-      } else if (selected && rows.length > 0) {
+      } else if (selected && rows.length + groupRows.length > 0) {
         await downloadGapXlsx({
           locationName: selected.name,
           upcoming,
-          rows: rows.map((r) => ({
-            position_name: r.position_name,
-            required_count: r.required_count,
-            current: r.current,
-            gap: r.gap,
-            names: r.names,
-          })),
+          rows: [
+            ...rows.map((r) => ({
+              position_name: r.position_name,
+              required_count: r.required_count,
+              current: r.current,
+              gap: r.gap,
+              names: r.names,
+            })),
+            ...groupRows.flatMap((g) => [
+              {
+                position_name: `${g.name} (pool)`,
+                required_count: g.total_min,
+                current: g.current,
+                gap: g.gap,
+                names: [`any mix of the roles below, ${g.total_min} total`],
+              },
+              ...g.members.map((m) => ({
+                position_name: m.position_name,
+                required_count: m.min_count > 0 ? `${m.min_count} min` : '—',
+                current: m.current,
+                gap: m.min_count > 0 ? m.gap : '—',
+                names: m.names,
+                indent: true,
+              })),
+            ]),
+          ],
           totals,
           generatedOn: new Date().toLocaleDateString(),
         })
@@ -222,49 +351,82 @@ export function GapView({ session, profile }: GapViewProps) {
         <RequirementsEditor
           mgmt={mgmt}
           reqs={reqs}
+          groups={groups}
+          locations={locations}
           actor={actor}
-          onSaved={() => {
-            loadReqs()
-            setShowConfig(false)
-          }}
+          onSaved={loadReqs}
+          onClose={() => setShowConfig(false)}
         />
       )}
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <label className="text-xs uppercase tracking-wide text-charcoal/50">View</label>
-        <select
-          value={selectedId}
-          onChange={(e) => setSelectedId(e.target.value)}
-          className="rounded-md border border-surface-line bg-surface px-3 py-2 text-sm"
+        <FilterMenu
+          label="Locations"
+          summary={
+            picked.size === 0
+              ? 'All locations'
+              : single
+                ? locations.find((l) => l.id === single)?.name ?? '1 location'
+                : `${picked.size} locations`
+          }
+          open={openMenu === 'loc'}
+          onToggle={() => setOpenMenu((m) => (m === 'loc' ? null : 'loc'))}
+          onClear={picked.size ? () => setPicked(new Set()) : undefined}
         >
-          <option value={ALL}>All locations (company-wide)</option>
-          <optgroup label="Upcoming">
-            {locations
-              .filter((l) => l.status === 'opening')
-              .map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                </option>
-              ))}
-          </optgroup>
-          <optgroup label="Open">
-            {locations
-              .filter((l) => l.status === 'open')
-              .map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                </option>
-              ))}
-          </optgroup>
-        </select>
-        {!isAll && upcoming && (
+          <CheckGroup
+            label="Upcoming"
+            items={locations.filter((l) => l.status === 'opening').map((l) => ({ id: l.id, name: l.name }))}
+            selected={picked}
+            onToggle={toggleLocation}
+            onSetMany={setManyLocations}
+          />
+          <CheckGroup
+            label="Open"
+            items={locations.filter((l) => l.status === 'open').map((l) => ({ id: l.id, name: l.name }))}
+            selected={picked}
+            onToggle={toggleLocation}
+            onSetMany={setManyLocations}
+          />
+        </FilterMenu>
+
+        <FilterMenu
+          label="Roles"
+          summary={
+            pickedRoles.size === 0
+              ? 'All roles'
+              : pickedRoles.size === 1
+                ? reqs.find((r) => r.position_id === [...pickedRoles][0])?.position_name ?? '1 role'
+                : `${pickedRoles.size} roles`
+          }
+          open={openMenu === 'role'}
+          onToggle={() => setOpenMenu((m) => (m === 'role' ? null : 'role'))}
+          onClear={pickedRoles.size ? () => setPickedRoles(new Set()) : undefined}
+        >
+          <CheckGroup
+            label="Management roles"
+            items={reqs
+              .filter((r) => r.required_count > 0)
+              .slice()
+              .sort(
+                (a, b) =>
+                  (a.level ?? Infinity) - (b.level ?? Infinity) ||
+                  a.position_name.localeCompare(b.position_name),
+              )
+              .map((r) => ({ id: r.position_id, name: r.position_name }))}
+            selected={pickedRoles}
+            onToggle={toggleRole}
+            onSetMany={setManyRoles}
+          />
+        </FilterMenu>
+
+        {single && upcoming && (
           <span className="rounded-full bg-info/10 px-2 py-0.5 text-xs font-medium text-info">
             upcoming — showing slated
           </span>
         )}
         <button
           onClick={() => void exportExcel()}
-          disabled={exporting || (isAll ? company.length === 0 : rows.length === 0)}
+          disabled={exporting || (single ? rows.length + groupRows.length === 0 : sortedCompany.length === 0)}
           className="ml-auto flex items-center gap-1.5 rounded-md border border-surface-line px-2.5 py-1.5 text-xs font-medium hover:bg-surface-muted disabled:opacity-50"
         >
           <Download className="h-3.5 w-3.5" /> {exporting ? 'Preparing…' : 'Download Excel'}
@@ -287,7 +449,7 @@ export function GapView({ session, profile }: GapViewProps) {
         />
       )}
 
-      {isAll ? (
+      {!single ? (
         <>
           <div className="mb-3 flex flex-wrap gap-2 text-xs">
             <Summary label="New-site" n={companyByReason['new-site']} cls={REASON_CLASS['new-site']} />
@@ -317,7 +479,14 @@ export function GapView({ session, profile }: GapViewProps) {
                   sortedCompany.map((g, i) => (
                     <tr key={i} className="border-b border-surface-line/60 last:border-0">
                       <td className="px-4 py-2.5 font-medium">{g.location_name}</td>
-                      <td className="px-4 py-2.5">{g.position_name}</td>
+                      <td className="px-4 py-2.5">
+                        {g.position_name}
+                        {g.kind === 'group' && (
+                          <span className="ml-1.5 rounded-full bg-info/10 px-1.5 py-0.5 text-[10px] font-medium text-info">
+                            pool
+                          </span>
+                        )}
+                      </td>
                       <td className="px-4 py-2.5 text-center font-medium text-danger">{g.gap}</td>
                       <td className="px-4 py-2.5">
                         <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${REASON_CLASS[g.reason]}`}>
@@ -365,6 +534,59 @@ export function GapView({ session, profile }: GapViewProps) {
                     {r.names.join(', ') || (upcoming ? 'not yet named' : '—')}
                   </td>
                 </tr>
+              ))}
+              {groupRows.map((g) => (
+                <Fragment key={g.id}>
+                  <tr className="border-b border-surface-line/60 bg-surface-muted/20">
+                    <td className="px-4 py-2.5 font-medium">
+                      {g.name}
+                      <span className="ml-1.5 rounded-full bg-info/10 px-1.5 py-0.5 text-[10px] font-medium text-info">
+                        pool
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-center">{g.total_min}</td>
+                    <td className="px-4 py-2.5 text-center">{g.current}</td>
+                    <td className="px-4 py-2.5 text-center">
+                      {g.gap > 0 ? (
+                        <span className="rounded-full bg-danger/10 px-2 py-0.5 text-xs font-medium text-danger">
+                          short {g.gap}
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success">
+                          OK
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-charcoal/60">
+                      any mix of the roles below, {g.total_min} total
+                    </td>
+                  </tr>
+                  {g.members.map((m) => (
+                    <tr key={m.position_id} className="border-b border-surface-line/60 last:border-0">
+                      <td className="px-4 py-2.5 pl-9 text-charcoal/80">{m.position_name}</td>
+                      <td className="px-4 py-2.5 text-center">{m.min_count > 0 ? `${m.min_count} min` : '—'}</td>
+                      <td className="px-4 py-2.5 text-center">{m.current}</td>
+                      <td className="px-4 py-2.5 text-center">
+                        {m.min_count > 0 ? (
+                          m.gap > 0 ? (
+                            <span className="rounded-full bg-danger/10 px-2 py-0.5 text-xs font-medium text-danger">
+                              short {m.gap}
+                            </span>
+                          ) : (
+                            <span className="rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success">
+                              OK
+                            </span>
+                          )
+                        ) : (
+                          <span className="text-xs text-charcoal/40">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-charcoal/60">
+                        {m.names.join(', ') || (upcoming ? 'not yet named' : '—')}
+                      </td>
+                    </tr>
+                  ))}
+                </Fragment>
               ))}
             </tbody>
             <tfoot>
@@ -436,62 +658,261 @@ function Summary({ label, n, cls }: { label: string; n: number; cls: string }) {
   )
 }
 
+// A labelled button that opens a checkbox popover. Empty selection = "all".
+function FilterMenu({
+  label,
+  summary,
+  open,
+  onToggle,
+  onClear,
+  children,
+}: {
+  label: string
+  summary: string
+  open: boolean
+  onToggle: () => void
+  onClear?: () => void
+  children: ReactNode
+}) {
+  return (
+    <div className="relative flex items-center gap-1.5">
+      <span className="text-xs uppercase tracking-wide text-charcoal/50">{label}</span>
+      <button
+        onClick={onToggle}
+        className="flex items-center gap-1.5 rounded-md border border-surface-line bg-surface px-3 py-2 text-sm hover:bg-surface-muted"
+      >
+        {summary}
+        <ChevronsUpDown className="h-3.5 w-3.5 opacity-50" />
+      </button>
+      {open && (
+        <>
+          <button aria-label="Close" className="fixed inset-0 z-10 cursor-default" onClick={onToggle} />
+          <div className="absolute left-0 top-full z-20 mt-1 max-h-72 w-64 overflow-auto rounded-md border border-surface-line bg-surface p-2 shadow-lg">
+            {onClear && (
+              <button
+                onClick={onClear}
+                className="mb-1 w-full rounded px-2 py-1 text-left text-xs font-medium text-cg-orange hover:bg-surface-muted"
+              >
+                Clear — show all
+              </button>
+            )}
+            {children}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function CheckGroup({
+  label,
+  items,
+  selected,
+  onToggle,
+  onSetMany,
+}: {
+  label: string
+  items: { id: string; name: string }[]
+  selected: Set<string>
+  onToggle: (id: string) => void
+  onSetMany?: (ids: string[], on: boolean) => void
+}) {
+  if (items.length === 0) return null
+  const ids = items.map((i) => i.id)
+  const allSelected = ids.every((id) => selected.has(id))
+  return (
+    <div className="mb-1">
+      <div className="flex items-center justify-between gap-2 px-2 py-0.5">
+        <p className="text-[10px] uppercase tracking-wide text-charcoal/40">{label}</p>
+        {onSetMany && (
+          <button
+            onClick={() => onSetMany(ids, !allSelected)}
+            className="text-[10px] font-medium text-cg-orange hover:underline"
+          >
+            {allSelected ? 'Clear' : 'Select all'}
+          </button>
+        )}
+      </div>
+      {items.map((it) => (
+        <label
+          key={it.id}
+          className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm hover:bg-surface-muted"
+        >
+          <input
+            type="checkbox"
+            checked={selected.has(it.id)}
+            onChange={() => onToggle(it.id)}
+            className="accent-cg-orange"
+          />
+          {it.name}
+        </label>
+      ))}
+    </div>
+  )
+}
+
 function RequirementsEditor({
   mgmt,
   reqs,
+  groups,
+  locations,
   actor,
   onSaved,
+  onClose,
 }: {
   mgmt: MgmtPosition[]
   reqs: RoleRequirement[]
+  groups: RequirementGroup[]
+  locations: GapLocation[]
   actor: ReturnType<typeof actorFrom>
   onSaved: () => void
+  onClose: () => void
 }) {
-  const reqByPos = useMemo(() => new Map(reqs.map((r) => [r.position_id, r.required_count])), [reqs])
+  // null scope = the global default; a location id = that location's overrides.
+  const [scope, setScope] = useState<string | null>(null)
+  const scopeName = scope ? locations.find((l) => l.id === scope)?.name ?? 'location' : null
+
+  const effSingles = useMemo(() => resolveSingleRequirements(reqs, scope), [reqs, scope])
+  const effGroups = useMemo(() => resolveGroupRequirements(groups, scope), [groups, scope])
+  const effCountByPos = useMemo(
+    () => new Map(effSingles.map((r) => [r.position_id, r.required_count])),
+    [effSingles],
+  )
+  // Positions with an explicit override at THIS location (for the reset action).
+  const overriddenPos = useMemo(
+    () => new Set(reqs.filter((r) => r.location_id === scope && scope !== null).map((r) => r.position_id)),
+    [reqs, scope],
+  )
+  const memberPos = useMemo(() => {
+    const s = new Set<string>()
+    for (const g of effGroups) for (const r of g.roles) s.add(r.position_id)
+    return s
+  }, [effGroups])
+  // Roles governed by a pool are managed there, not as a single count.
+  const singleRoles = useMemo(() => mgmt.filter((m) => !memberPos.has(m.id)), [mgmt, memberPos])
+
   const [edits, setEdits] = useState<Map<string, number>>(new Map())
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  // Switching scope discards unsaved single-count edits.
+  useEffect(() => setEdits(new Map()), [scope])
 
-  const value = (id: string) => edits.get(id) ?? reqByPos.get(id) ?? 0
+  const value = (id: string) => edits.get(id) ?? effCountByPos.get(id) ?? 0
 
   async function save() {
     setSaving(true)
     setErr(null)
     try {
       for (const [posId, count] of edits) {
-        if (count === (reqByPos.get(posId) ?? 0)) continue
+        if (count === (effCountByPos.get(posId) ?? 0)) continue
         const name = mgmt.find((m) => m.id === posId)?.name ?? 'role'
-        await setRoleRequirement(actor, posId, name, count)
+        await setRoleRequirement(actor, posId, name, count, scope)
       }
+      setEdits(new Map())
       onSaved()
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
+      setErr(errText(e))
     } finally {
       setSaving(false)
     }
   }
 
+  async function resetRole(posId: string, name: string) {
+    if (scope === null) return
+    setErr(null)
+    try {
+      await clearRoleRequirement(actor, posId, name, scope)
+      setEdits((prev) => {
+        const next = new Map(prev)
+        next.delete(posId)
+        return next
+      })
+      onSaved()
+    } catch (e) {
+      setErr(errText(e))
+    }
+  }
+
+  const open = locations.filter((l) => l.status === 'open')
+  const opening = locations.filter((l) => l.status === 'opening')
+
   return (
     <div className="mb-4 rounded-xl border border-cg-orange/40 bg-cg-orange-soft/30 p-4">
-      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-charcoal/50">
-        Required roster (base template — applies to every restaurant)
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium uppercase tracking-wide text-charcoal/50">
+            Required roster for
+          </span>
+          <select
+            value={scope ?? ''}
+            onChange={(e) => setScope(e.target.value || null)}
+            className="rounded-md border border-surface-line bg-surface px-2 py-1.5 text-sm font-medium"
+          >
+            <option value="">Global default (all restaurants)</option>
+            {open.length > 0 && (
+              <optgroup label="Open">
+                {open.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {opening.length > 0 && (
+              <optgroup label="Upcoming">
+                {opening.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+        </div>
+        <button onClick={onClose} className="text-xs font-medium text-charcoal/50 hover:text-charcoal">
+          Done
+        </button>
+      </div>
+      <p className="mb-2 text-[11px] text-charcoal/55">
+        {scope === null
+          ? 'The baseline every restaurant is measured against unless it has its own override.'
+          : `${scopeName} inherits the global default; anything you set here overrides it for this site only.`}
       </p>
       <div className="grid gap-2 sm:grid-cols-2">
-        {mgmt.map((m) => (
-          <label key={m.id} className="flex items-center justify-between gap-2 text-sm">
-            <span className="text-charcoal/70">{m.name}</span>
-            <input
-              type="number"
-              min={0}
-              value={value(m.id)}
-              onChange={(e) => {
-                const n = Math.max(0, parseInt(e.target.value || '0', 10))
-                setEdits((prev) => new Map(prev).set(m.id, n))
-              }}
-              className="w-16 rounded-md border border-surface-line bg-surface px-2 py-1 text-center text-sm"
-            />
-          </label>
-        ))}
+        {singleRoles.map((m) => {
+          const isOverride = overriddenPos.has(m.id)
+          return (
+            <div key={m.id} className="flex items-center justify-between gap-2 text-sm">
+              <span className="flex items-center gap-1.5 text-charcoal/70">
+                {m.name}
+                {scope !== null &&
+                  (isOverride ? (
+                    <button
+                      onClick={() => void resetRole(m.id, m.name)}
+                      className="rounded-full bg-info/10 px-1.5 py-0.5 text-[10px] font-medium text-info hover:bg-info/20"
+                      title="Remove this override — inherit the global default again"
+                    >
+                      override · reset
+                    </button>
+                  ) : (
+                    <span className="rounded-full bg-surface-muted px-1.5 py-0.5 text-[10px] text-charcoal/40">
+                      inherited
+                    </span>
+                  ))}
+              </span>
+              <input
+                type="number"
+                min={0}
+                value={value(m.id)}
+                onChange={(e) => {
+                  const n = Math.max(0, parseInt(e.target.value || '0', 10))
+                  setEdits((prev) => new Map(prev).set(m.id, n))
+                }}
+                className="w-16 rounded-md border border-surface-line bg-surface px-2 py-1 text-center text-sm"
+              />
+            </div>
+          )
+        })}
       </div>
       {err && <p className="mt-2 text-xs text-danger">{err}</p>}
       <button
@@ -499,8 +920,278 @@ function RequirementsEditor({
         disabled={saving}
         className="mt-3 rounded-md bg-cg-orange px-3 py-1.5 text-sm font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
       >
-        {saving ? 'Saving…' : 'Save roster'}
+        {saving ? 'Saving…' : 'Save counts'}
       </button>
+
+      <GroupEditor key={scope ?? 'global'} groups={effGroups} mgmt={mgmt} actor={actor} scope={scope} onChanged={onSaved} />
+    </div>
+  )
+}
+
+type GroupEdit =
+  | { mode: 'edit'; group: RequirementGroup }
+  | { mode: 'new' }
+  | { mode: 'fork'; from: RequirementGroup }
+
+function GroupEditor({
+  groups,
+  mgmt,
+  actor,
+  scope,
+  onChanged,
+}: {
+  groups: RequirementGroup[]
+  mgmt: MgmtPosition[]
+  actor: ReturnType<typeof actorFrom>
+  scope: string | null
+  onChanged: () => void
+}) {
+  const [editing, setEditing] = useState<GroupEdit | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const isInherited = (g: RequirementGroup) => scope !== null && g.location_id === null
+
+  async function remove(g: RequirementGroup) {
+    const isOverride = g.overrides_group_id !== null
+    const msg = isOverride
+      ? `Remove this location override of "${g.name}" (back to the global pool)?`
+      : `Delete pool "${g.name}"?`
+    if (!window.confirm(msg)) return
+    setBusy(true)
+    setErr(null)
+    try {
+      await deleteRequirementGroup(actor, g.id, g.name)
+      onChanged()
+    } catch (e) {
+      setErr(errText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function badge(g: RequirementGroup) {
+    if (scope === null) return null
+    if (isInherited(g))
+      return <span className="rounded-full bg-surface-muted px-1.5 py-0.5 text-[10px] text-charcoal/40">inherited</span>
+    if (g.overrides_group_id)
+      return <span className="rounded-full bg-info/10 px-1.5 py-0.5 text-[10px] font-medium text-info">overrides global</span>
+    return <span className="rounded-full bg-info/10 px-1.5 py-0.5 text-[10px] font-medium text-info">location only</span>
+  }
+
+  return (
+    <div className="mt-4 border-t border-cg-orange/30 pt-3">
+      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-charcoal/50">
+        Pooled groups — a total across roles, with per-role minimums
+      </p>
+      {groups.length === 0 && !editing && (
+        <p className="mb-2 text-xs text-charcoal/55">
+          None yet. Example: “Kitchen line” = 5 total across Senior Sous / Sous / Chef de Partie,
+          with Sous ≥ 2.
+        </p>
+      )}
+      <ul className="space-y-1.5">
+        {groups.map((g) => (
+          <li
+            key={g.id}
+            className="flex items-start justify-between gap-2 rounded-md border border-surface-line bg-surface px-3 py-1.5 text-sm"
+          >
+            <div className="min-w-0">
+              <span className="font-medium">{g.name}</span> {badge(g)}{' '}
+              <span className="text-charcoal/60">= {g.total_min} total</span>
+              <span className="text-charcoal/50">
+                {' · '}
+                {g.roles.map((r) => `${r.position_name}${r.min_count ? ` ≥${r.min_count}` : ''}`).join(', ')}
+              </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              {isInherited(g) ? (
+                <button
+                  onClick={() => setEditing({ mode: 'fork', from: g })}
+                  className="rounded px-1 text-xs font-medium text-cg-orange hover:underline"
+                >
+                  Override here
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setEditing({ mode: 'edit', group: g })}
+                    className="rounded px-1 text-xs font-medium text-cg-orange hover:underline"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => void remove(g)}
+                    disabled={busy}
+                    aria-label={g.overrides_group_id ? 'Remove override' : 'Delete pool'}
+                    className="rounded p-1 text-charcoal/40 hover:text-danger disabled:opacity-50"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+      {err && <p className="mt-1 text-xs text-danger">{err}</p>}
+      {editing ? (
+        <GroupForm
+          key={editing.mode === 'edit' ? editing.group.id : editing.mode === 'fork' ? `fork-${editing.from.id}` : 'new'}
+          initial={editing.mode === 'edit' ? editing.group : null}
+          prefill={editing.mode === 'fork' ? editing.from : null}
+          createScope={
+            editing.mode === 'edit'
+              ? null
+              : { location_id: scope, overrides_group_id: editing.mode === 'fork' ? editing.from.id : null }
+          }
+          mgmt={mgmt}
+          actor={actor}
+          onDone={() => {
+            setEditing(null)
+            onChanged()
+          }}
+          onCancel={() => setEditing(null)}
+        />
+      ) : (
+        <button
+          onClick={() => setEditing({ mode: 'new' })}
+          className="mt-2 flex items-center gap-1 rounded-md border border-surface-line bg-surface px-2.5 py-1.5 text-xs font-medium hover:bg-surface-muted"
+        >
+          <Plus className="h-3.5 w-3.5" /> {scope === null ? 'Add pool' : 'Add pool for this site'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+function GroupForm({
+  initial,
+  prefill,
+  createScope,
+  mgmt,
+  actor,
+  onDone,
+  onCancel,
+}: {
+  initial: RequirementGroup | null
+  prefill: RequirementGroup | null
+  createScope: { location_id: string | null; overrides_group_id: string | null } | null
+  mgmt: MgmtPosition[]
+  actor: ReturnType<typeof actorFrom>
+  onDone: () => void
+  onCancel: () => void
+}) {
+  const seed = initial ?? prefill
+  const [name, setName] = useState(seed?.name ?? '')
+  const [total, setTotal] = useState(seed?.total_min ?? 0)
+  const [roleMins, setRoleMins] = useState<Map<string, number>>(
+    () => new Map((seed?.roles ?? []).map((r) => [r.position_id, r.min_count])),
+  )
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  function toggleRole(id: string) {
+    setRoleMins((prev) => {
+      const next = new Map(prev)
+      if (next.has(id)) next.delete(id)
+      else next.set(id, 0)
+      return next
+    })
+  }
+
+  async function save() {
+    if (!name.trim() || roleMins.size === 0) {
+      setErr('Give the pool a name and pick at least one role.')
+      return
+    }
+    setSaving(true)
+    setErr(null)
+    try {
+      await saveRequirementGroup(actor, {
+        id: initial?.id,
+        name: name.trim(),
+        total_min: total,
+        roles: [...roleMins].map(([position_id, min_count]) => ({ position_id, min_count })),
+        location_id: createScope?.location_id ?? null,
+        overrides_group_id: createScope?.overrides_group_id ?? null,
+      })
+      onDone()
+    } catch (e) {
+      setErr(errText(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="mt-2 rounded-md border border-cg-orange/40 bg-surface p-3">
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="text-sm">
+          <span className="block text-[11px] text-charcoal/50">Pool name</span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Kitchen line"
+            className="rounded-md border border-surface-line px-2 py-1 text-sm"
+          />
+        </label>
+        <label className="text-sm">
+          <span className="block text-[11px] text-charcoal/50">Total needed</span>
+          <input
+            type="number"
+            min={0}
+            value={total}
+            onChange={(e) => setTotal(Math.max(0, parseInt(e.target.value || '0', 10)))}
+            className="w-20 rounded-md border border-surface-line px-2 py-1 text-center text-sm"
+          />
+        </label>
+      </div>
+      <p className="mt-2 text-[11px] uppercase tracking-wide text-charcoal/40">
+        Roles in this pool (tick, then set a minimum)
+      </p>
+      <div className="mt-1 grid gap-1 sm:grid-cols-2">
+        {mgmt.map((m) => {
+          const on = roleMins.has(m.id)
+          return (
+            <div key={m.id} className="flex items-center justify-between gap-2 text-sm">
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={on} onChange={() => toggleRole(m.id)} className="accent-cg-orange" />
+                <span className="text-charcoal/70">{m.name}</span>
+              </label>
+              {on && (
+                <span className="flex items-center gap-1 text-[11px] text-charcoal/50">
+                  min
+                  <input
+                    type="number"
+                    min={0}
+                    value={roleMins.get(m.id) ?? 0}
+                    onChange={(e) =>
+                      setRoleMins((prev) =>
+                        new Map(prev).set(m.id, Math.max(0, parseInt(e.target.value || '0', 10))),
+                      )
+                    }
+                    className="w-14 rounded-md border border-surface-line px-1.5 py-0.5 text-center text-sm"
+                  />
+                </span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      {err && <p className="mt-1 text-xs text-danger">{err}</p>}
+      <div className="mt-2 flex gap-2">
+        <button
+          onClick={() => void save()}
+          disabled={saving}
+          className="rounded-md bg-cg-orange px-3 py-1.5 text-sm font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
+        >
+          {saving ? 'Saving…' : 'Save pool'}
+        </button>
+        <button onClick={onCancel} className="rounded-md border border-surface-line px-3 py-1.5 text-sm hover:bg-surface-muted">
+          Cancel
+        </button>
+      </div>
     </div>
   )
 }

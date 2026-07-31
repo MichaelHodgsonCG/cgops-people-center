@@ -8,6 +8,22 @@ import { supabase } from '../../lib/supabase'
 import { recordAudit, recordEvent, type Actor } from '../../lib/activity'
 import type { Note, NoteCategory, NoteVisibility } from '../../types'
 
+// Is `viewer` strictly above `subject` in the reporting chain? Mirrors the
+// people_center_is_above() the notes RLS uses, so the UI only offers a note
+// composer where a create will actually be allowed. Admin/executive bypass
+// this (they write company-wide); this gates the manager roles.
+export async function fetchViewerIsAbove(
+  viewerPersonId: string,
+  subjectPersonId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase.rpc('people_center_is_above', {
+    p_viewer: viewerPersonId,
+    p_subject: subjectPersonId,
+  })
+  if (error) throw error
+  return data === true
+}
+
 export interface PersonAssignment {
   id: string
   is_primary: boolean
