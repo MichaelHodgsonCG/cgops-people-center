@@ -17,11 +17,13 @@ import {
   Settings2,
   Trash2,
   UploadCloud,
+  UserMinus,
 } from 'lucide-react'
 import { ImportPanel } from './ImportPanel'
 import { actorFrom } from '../../lib/activity'
 import { errText } from '../../lib/errText'
 import {
+  EMPTY_FILL,
   deleteRequirementGroup,
   fetchCompanyGaps,
   fetchFillForLocation,
@@ -91,12 +93,15 @@ export function GapView({ session, profile }: GapViewProps) {
   const [sortKey, setSortKey] = useState<CompanySortKey>('type')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [importing, setImporting] = useState(false)
+  // Incoming hires are named but haven't started — a maybe. They count as
+  // fill by default; this toggle treats their seats as open instead.
+  const [excludeIncoming, setExcludeIncoming] = useState(false)
 
   const loadReqs = useCallback(() => {
     fetchRoleRequirements().then(setReqs).catch((e: Error) => setError(e.message))
     fetchRequirementGroups().then(setGroups).catch((e: Error) => setError(e.message))
-    fetchCompanyGaps().then(setCompany).catch((e: Error) => setError(e.message))
-  }, [])
+    fetchCompanyGaps(!excludeIncoming).then(setCompany).catch((e: Error) => setError(e.message))
+  }, [excludeIncoming])
 
   useEffect(() => {
     Promise.all([
@@ -104,18 +109,22 @@ export function GapView({ session, profile }: GapViewProps) {
       fetchRequirementGroups(),
       fetchManagementPositions(),
       fetchGapLocations(),
-      fetchCompanyGaps(),
     ])
-      .then(([r, g, m, locs, c]) => {
+      .then(([r, g, m, locs]) => {
         setReqs(r)
         setGroups(g)
         setMgmt(m)
         setLocations(locs)
-        setCompany(c)
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
   }, [])
+
+  // The company report depends on whether incoming hires count; refetch when
+  // the toggle flips (also does the initial fetch).
+  useEffect(() => {
+    fetchCompanyGaps(!excludeIncoming).then(setCompany).catch((e: Error) => setError(e.message))
+  }, [excludeIncoming])
 
   const single = picked.size === 1 ? [...picked][0] : null
   const isMulti = picked.size >= 2
@@ -201,10 +210,17 @@ export function GapView({ session, profile }: GapViewProps) {
       .filter((r) => r.required_count > 0 && !groupMemberPos.has(r.position_id))
       .filter((r) => pickedRoles.size === 0 || pickedRoles.has(r.position_id))
       .map((r) => {
-        const f = fill.get(r.position_id) ?? { count: 0, names: [] }
-        return { ...r, current: f.count, names: f.names, gap: Math.max(0, r.required_count - f.count) }
+        const f = fill.get(r.position_id) ?? EMPTY_FILL
+        const current = f.count + (excludeIncoming ? 0 : f.incomingCount)
+        return {
+          ...r,
+          current,
+          names: f.names,
+          incomingNames: f.incomingNames,
+          gap: Math.max(0, r.required_count - current),
+        }
       })
-  }, [effSingles, fill, pickedRoles, groupMemberPos])
+  }, [effSingles, fill, pickedRoles, groupMemberPos, excludeIncoming])
 
   // Group rows for the single-location table (fill comes from the location's
   // per-position fill map). Each pool renders as a header row plus one row per
@@ -221,11 +237,13 @@ export function GapView({ session, profile }: GapViewProps) {
       .map((g) => {
         const filledByPos = new Map<string, number>()
         for (const r of g.roles) {
-          filledByPos.set(r.position_id, (fill.get(r.position_id) ?? { count: 0, names: [] }).count)
+          const f = fill.get(r.position_id) ?? EMPTY_FILL
+          filledByPos.set(r.position_id, f.count + (excludeIncoming ? 0 : f.incomingCount))
         }
         const gg = groupGap(g, filledByPos)
         const members = g.roles.map((r) => {
-          const f = fill.get(r.position_id) ?? { count: 0, names: [] }
+          const f = fill.get(r.position_id) ?? EMPTY_FILL
+          const current = f.count + (excludeIncoming ? 0 : f.incomingCount)
           // A minimum counts this role plus more senior pool roles, so a
           // Senior Sous can cover a Sous minimum.
           const cover = minCover(g, r, filledByPos)
@@ -233,15 +251,16 @@ export function GapView({ session, profile }: GapViewProps) {
             position_id: r.position_id,
             position_name: r.position_name,
             min_count: r.min_count,
-            current: f.count,
+            current,
             names: f.names,
-            seniorCovered: r.min_count > 0 && f.count < r.min_count && cover >= r.min_count,
+            incomingNames: f.incomingNames,
+            seniorCovered: r.min_count > 0 && current < r.min_count && cover >= r.min_count,
             gap: Math.max(0, r.min_count - cover),
           }
         })
         return { id: g.id, name: g.name, total_min: g.total_min, current: gg.filledTotal, gap: gg.gap, members }
       })
-  }, [effGroups, fill, pickedRoles])
+  }, [effGroups, fill, pickedRoles, excludeIncoming])
 
   const totals = useMemo(() => {
     const required =
@@ -317,7 +336,15 @@ export function GapView({ session, profile }: GapViewProps) {
     setError(null)
     try {
       if (!single) {
-        await downloadCompanyGapXlsx({ rows: sortedCompany, generatedOn: new Date().toLocaleDateString() })
+        await downloadCompanyGapXlsx({
+          rows: sortedCompany.map((r) => ({
+            ...r,
+            detail: [r.detail, r.incoming_names?.length ? `incoming: ${r.incoming_names.join(', ')}` : '']
+              .filter(Boolean)
+              .join(' · '),
+          })),
+          generatedOn: new Date().toLocaleDateString(),
+        })
       } else if (selected && rows.length + groupRows.length > 0) {
         await downloadGapXlsx({
           locationName: selected.name,
@@ -328,7 +355,7 @@ export function GapView({ session, profile }: GapViewProps) {
               required_count: r.required_count,
               current: r.current,
               gap: r.gap,
-              names: r.names,
+              names: [...r.names, ...r.incomingNames.map((n) => `${n} (incoming)`)],
             })),
             ...groupRows.flatMap((g) => [
               {
@@ -343,7 +370,7 @@ export function GapView({ session, profile }: GapViewProps) {
                 required_count: m.min_count > 0 ? `${m.min_count} min` : '—',
                 current: m.current,
                 gap: m.min_count > 0 ? (m.seniorCovered && m.gap === 0 ? 'OK (senior covers)' : m.gap) : '—',
-                names: m.names,
+                names: [...m.names, ...m.incomingNames.map((n) => `${n} (incoming)`)],
                 indent: true,
               })),
             ]),
@@ -457,6 +484,15 @@ export function GapView({ session, profile }: GapViewProps) {
           />
         </FilterMenu>
 
+        <button
+          onClick={() => setExcludeIncoming((v) => !v)}
+          title="Incoming hires are named but haven't started — exclude them to treat their seats as open"
+          className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium ${
+            excludeIncoming ? 'border-info bg-info/10 text-info' : 'border-surface-line hover:bg-surface-muted'
+          }`}
+        >
+          <UserMinus className="h-3.5 w-3.5" /> Exclude incoming
+        </button>
         {single && upcoming && (
           <span className="rounded-full bg-info/10 px-2 py-0.5 text-xs font-medium text-info">
             upcoming — showing slated
@@ -478,6 +514,18 @@ export function GapView({ session, profile }: GapViewProps) {
           </button>
         )}
       </div>
+
+      <p className="mb-3 text-[11px] text-charcoal/55">
+        {excludeIncoming ? (
+          <>Incoming hires are excluded — a seat only counts people who have started.</>
+        ) : (
+          <>
+            <span className="font-medium text-info">Incoming</span> hires are named but haven’t
+            started — shown in blue and counted as filling their seat. Use “Exclude incoming” to
+            treat those seats as open.
+          </>
+        )}
+      </p>
 
       {importing && (
         <ImportPanel
@@ -531,7 +579,15 @@ export function GapView({ session, profile }: GapViewProps) {
                           {REASON_LABEL[g.reason]}
                         </span>
                       </td>
-                      <td className="px-4 py-2.5 text-xs text-charcoal/60">{g.detail || '—'}</td>
+                      <td className="px-4 py-2.5 text-xs text-charcoal/60">
+                        {g.detail}
+                        {(g.incoming_names?.length ?? 0) > 0 && (
+                          <span className="font-medium text-info">
+                            {g.detail ? ' · ' : ''}incoming: {g.incoming_names?.join(', ')}
+                          </span>
+                        )}
+                        {!g.detail && (g.incoming_names?.length ?? 0) === 0 && '—'}
+                      </td>
                     </tr>
                   ))
                 )}
@@ -569,7 +625,7 @@ export function GapView({ session, profile }: GapViewProps) {
                     )}
                   </td>
                   <td className="px-4 py-2.5 text-xs text-charcoal/60">
-                    {r.names.join(', ') || (upcoming ? 'not yet named' : '—')}
+                    <Names names={r.names} incoming={r.incomingNames} empty={upcoming ? 'not yet named' : '—'} />
                   </td>
                 </tr>
               ))}
@@ -623,7 +679,7 @@ export function GapView({ session, profile }: GapViewProps) {
                         )}
                       </td>
                       <td className="px-4 py-2.5 text-xs text-charcoal/60">
-                        {m.names.join(', ') || (upcoming ? 'not yet named' : '—')}
+                        <Names names={m.names} incoming={m.incomingNames} empty={upcoming ? 'not yet named' : '—'} />
                       </td>
                     </tr>
                   ))}
@@ -688,6 +744,23 @@ function SortHeader({
         )}
       </button>
     </th>
+  )
+}
+
+// Started people in the normal colour; incoming hires (named but not started —
+// a maybe) in blue with an "(incoming)" note.
+function Names({ names, incoming, empty }: { names: string[]; incoming: string[]; empty: string }) {
+  if (names.length === 0 && incoming.length === 0) return <>{empty}</>
+  return (
+    <>
+      {names.join(', ')}
+      {incoming.length > 0 && (
+        <span className="font-medium text-info">
+          {names.length > 0 ? ', ' : ''}
+          {incoming.map((n) => `${n} (incoming)`).join(', ')}
+        </span>
+      )}
+    </>
   )
 }
 
