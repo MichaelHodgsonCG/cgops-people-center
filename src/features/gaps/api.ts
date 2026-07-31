@@ -316,10 +316,14 @@ export interface GapLocation {
 }
 
 export async function fetchGapLocations(): Promise<GapLocation[]> {
+  // Restaurants only: the required roster measures concept sites (Beertown,
+  // Wildcraft, …). Locations without a concept — Head Office — run an entirely
+  // different roster and stay out of the gap analysis.
   const { data, error } = await supabase
     .from('people_center_locations')
     .select('id, name, status')
     .in('status', ['open', 'opening'])
+    .not('concept_id', 'is', null)
     .order('name')
   if (error) throw error
   return (data as unknown as GapLocation[]) ?? []
