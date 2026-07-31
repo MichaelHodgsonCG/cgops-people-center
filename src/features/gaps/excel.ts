@@ -15,6 +15,8 @@ export interface CompanyGapXlsxRow {
   location_name: string
   position_name: string
   gap: number
+  priority: string // High / Medium / Low
+  needed_by: string // ISO date, 'ASAP', or '—'
   reason: 'new-site' | 'backfill' | 'understaffed'
   detail: string
 }
@@ -81,18 +83,29 @@ export async function downloadCompanyGapXlsx(opts: {
     [],
     // "Assign to" is the fill-in column: type who should fill each open role,
     // then re-upload to record them as slated leaders (Gap Analysis → Upload).
-    ['Location', 'Role', 'Gap', 'Type', 'Detail', 'Assign to'],
+    ['Location', 'Role', 'Gap', 'Priority', 'Needed by', 'Type', 'Detail', 'Assign to'],
     ...opts.rows.map((r) => [
       r.location_name,
       r.position_name,
       r.gap,
+      r.priority,
+      r.needed_by,
       REASON_TEXT[r.reason],
       r.detail || '—',
       '',
     ]),
   ]
   const ws = XLSX.utils.aoa_to_sheet(aoa)
-  ws['!cols'] = [{ wch: 24 }, { wch: 24 }, { wch: 6 }, { wch: 14 }, { wch: 48 }, { wch: 28 }]
+  ws['!cols'] = [
+    { wch: 24 },
+    { wch: 24 },
+    { wch: 6 },
+    { wch: 9 },
+    { wch: 12 },
+    { wch: 14 },
+    { wch: 48 },
+    { wch: 28 },
+  ]
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'Company Gaps')
   XLSX.writeFile(wb, 'Company-wide Leadership Gaps.xlsx')
