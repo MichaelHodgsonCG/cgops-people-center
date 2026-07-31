@@ -335,6 +335,7 @@ export interface CompanyGap {
   position_id: string // role: the position id; group: the group id
   position_name: string // role: role name; group: group name
   member_position_ids?: string[] // group only — its roles, for role-filtering
+  overrides_group_id?: string | null // group only — the global pool this one replaces
   level: number | null
   required: number
   projected: number
@@ -515,6 +516,7 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
           position_id: g.id,
           position_name: g.name,
           member_position_ids: g.roles.map((r) => r.position_id),
+          overrides_group_id: g.overrides_group_id,
           level: Math.min(...g.roles.map((r) => r.level ?? Infinity)),
           required: g.total_min,
           projected: filledTotal,
