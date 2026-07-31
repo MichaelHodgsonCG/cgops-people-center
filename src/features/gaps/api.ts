@@ -316,7 +316,10 @@ export function groupGap(
     if (r.min_count > 0) {
       const cover = minCover(group, r, filledByPosition)
       minShort = Math.max(minShort, r.min_count - cover)
-      parts.push(`${r.position_name} ${cover}/${r.min_count} min`)
+      // Always show the LITERAL headcount for the role (so the per-role
+      // numbers add up to filledTotal); senior cover only annotates.
+      const seniorCovers = f < r.min_count && cover >= r.min_count
+      parts.push(`${r.position_name} ${f}/${r.min_count} min${seniorCovers ? ' (senior covers)' : ''}`)
     } else {
       parts.push(`${r.position_name} ${f}`)
     }
