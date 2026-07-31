@@ -370,6 +370,7 @@ export interface CompanyGap {
   reason: GapReason
   detail: string // movers "Name → Dest" (backfill), slated names (new-site), or ''
   incoming_names?: string[] // named hires here who haven't started — the maybes
+  bench_names?: string[] // ranked successors for the seat, e.g. "Dinesh (#1)" — a plan, not fill
 }
 
 /** Company-wide missing roles across every location, accounting for moves: an
@@ -398,8 +399,9 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
       .from('people_center_succession_slots')
       .select(
         `position_id, incumbent_person_id,
-         incumbent:people_center_people!people_center_succession_slots_incumbent_person_id_fkey ( full_name ),
-         location:people_center_locations ( id, name, status )`,
+         incumbent:people_center_people!people_center_succession_slots_incumbent_person_id_fkey ( full_name, status ),
+         location:people_center_locations ( id, name, status ),
+         candidates:people_center_succession_candidates ( rank, people:people_center_people ( full_name ) )`,
       ),
   ])
   if (assignRes.error) throw assignRes.error
@@ -438,18 +440,34 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
     incumbent_person_id: string | null
     incumbent: { full_name: string; status: string } | null
     location: { id: string; name: string; status: string } | null
+    candidates: { rank: number; people: { full_name: string } | null }[] | null
   }
   const slatedByCell = new Map<string, CellPerson[]>()
   const moverDest = new Map<string, string>()
+  // Ranked successors per seat — a PLAN for the seat, never counted as fill.
+  // RLS keeps candidates executive/admin-only; other viewers just get none.
+  const benchByCell = new Map<string, { rank: number; name: string }[]>()
   for (const s of (slotRes.data as unknown as S[]) ?? []) {
-    if (!s.position_id || !s.location || s.location.status !== 'opening') continue
-    if (!s.incumbent_person_id || !s.incumbent) continue
+    if (!s.position_id || !s.location) continue
     const k = key(s.location.id, s.position_id)
+    for (const c of s.candidates ?? []) {
+      if (!c.people?.full_name) continue
+      const arr = benchByCell.get(k) ?? []
+      arr.push({ rank: c.rank, name: c.people.full_name })
+      benchByCell.set(k, arr)
+    }
+    if (s.location.status !== 'opening') continue
+    if (!s.incumbent_person_id || !s.incumbent) continue
     const arr = slatedByCell.get(k) ?? []
     arr.push({ id: s.incumbent_person_id, name: s.incumbent.full_name, incoming: s.incumbent.status === 'incoming' })
     slatedByCell.set(k, arr)
     moverDest.set(s.incumbent_person_id, s.location.name)
   }
+  const benchFor = (locId: string, posIds: string[]): string[] =>
+    posIds
+      .flatMap((p) => benchByCell.get(key(locId, p)) ?? [])
+      .sort((a, b) => a.rank - b.rank)
+      .map((c) => `${c.name} (#${c.rank})`)
 
   // Everyone attached to one (location, position): open → current staff minus
   // movers; opening → slated ∪ assigned hires, de-duped by person. Shared by
@@ -502,6 +520,7 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
           reason: 'new-site',
           detail: named.length ? `named: ${named.join(', ')}` : '',
           incoming_names: incomingNames,
+          bench_names: benchFor(loc.id, [r.position_id]),
         })
       } else {
         const k = key(loc.id, r.position_id)
@@ -520,6 +539,7 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
           reason: movers.length > 0 ? 'backfill' : 'understaffed',
           detail: movers.map((m) => `${m.name} → ${moverDest.get(m.id)}`).join(', '),
           incoming_names: incomingNames,
+          bench_names: benchFor(loc.id, [r.position_id]),
         })
       }
     }
@@ -551,6 +571,7 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
           reason: loc.status === 'opening' ? 'new-site' : 'understaffed',
           detail,
           incoming_names: incomingNames,
+          bench_names: benchFor(loc.id, g.roles.map((r) => r.position_id)),
         })
       }
     }
@@ -678,6 +699,39 @@ export async function fetchFillForLocation(
     const st = r.person.status
     if (st === 'active' || st === 'leave') add(r.position_id, r.person.full_name, false)
     else if (st === 'incoming') add(r.position_id, r.person.full_name, true)
+  }
+  return map
+}
+
+/** Ranked succession candidates for each seat at a location, keyed by
+ * position_id — names like "Dinesh Tirumalasetti (#1)". A plan for the seat,
+ * never counted as fill. RLS keeps candidates executive/admin-only; other
+ * viewers simply get an empty map. */
+export async function fetchBenchForLocation(locationId: string): Promise<Map<string, string[]>> {
+  const { data, error } = await supabase
+    .from('people_center_succession_slots')
+    .select(
+      `position_id,
+       candidates:people_center_succession_candidates ( rank, people:people_center_people ( full_name ) )`,
+    )
+    .eq('location_id', locationId)
+  if (error) throw error
+  type Row = {
+    position_id: string | null
+    candidates: { rank: number; people: { full_name: string } | null }[] | null
+  }
+  const byPos = new Map<string, { rank: number; name: string }[]>()
+  for (const r of (data as unknown as Row[]) ?? []) {
+    if (!r.position_id) continue
+    const arr = byPos.get(r.position_id) ?? []
+    for (const c of r.candidates ?? []) {
+      if (c.people?.full_name) arr.push({ rank: c.rank, name: c.people.full_name })
+    }
+    if (arr.length > 0) byPos.set(r.position_id, arr)
+  }
+  const map = new Map<string, string[]>()
+  for (const [pos, arr] of byPos) {
+    map.set(pos, arr.sort((a, b) => a.rank - b.rank).map((c) => `${c.name} (#${c.rank})`))
   }
   return map
 }

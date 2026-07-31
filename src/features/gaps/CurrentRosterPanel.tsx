@@ -9,13 +9,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, X } from 'lucide-react'
 import { fetchPositionTemplate, type TemplatePosition } from '../upcoming/api'
-import { fetchLocationRoster, type GapLocation, type RosterPerson } from './api'
+import { fetchBenchForLocation, fetchLocationRoster, type GapLocation, type RosterPerson } from './api'
 
 interface OrgNode {
   positionId: string
   name: string
   level: number
   people: RosterPerson[]
+  benchNames: string[] // ranked successors — a plan for the seat, not fill
   rosterSeat: boolean // management-roster seat — shows OPEN when empty
   children: OrgNode[]
 }
@@ -30,12 +31,16 @@ export function CurrentRosterPanel({
   const upcoming = location.status === 'opening'
   const [template, setTemplate] = useState<TemplatePosition[] | null>(null)
   const [roster, setRoster] = useState<Map<string, RosterPerson[]> | null>(null)
+  const [bench, setBench] = useState<Map<string, string[]>>(new Map())
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     fetchPositionTemplate().then(setTemplate).catch((e: Error) => setError(e.message))
     fetchLocationRoster(location.id, upcoming)
       .then(setRoster)
+      .catch((e: Error) => setError(e.message))
+    fetchBenchForLocation(location.id)
+      .then(setBench)
       .catch((e: Error) => setError(e.message))
   }, [location.id, upcoming])
 
@@ -65,6 +70,7 @@ export function CurrentRosterPanel({
         name: tp?.name ?? 'Role',
         level: tp?.level ?? Number.POSITIVE_INFINITY,
         people: roster.get(pid) ?? [],
+        benchNames: bench.get(pid) ?? [],
         rosterSeat: tp?.default_person_kind === 'manager' && Boolean(tp?.people_center_eligible),
         children: [],
       })
@@ -83,7 +89,7 @@ export function CurrentRosterPanel({
     tops.sort((a, b) => a.level - b.level || a.name.localeCompare(b.name))
     tops.forEach(sortRec)
     return tops
-  }, [template, roster])
+  }, [template, roster, bench])
 
   const open = useMemo(() => countOpen(roots), [roots])
 
@@ -129,7 +135,9 @@ export function CurrentRosterPanel({
             <span className="font-medium text-danger">OPEN</span> = no one holds this management
             seat. <span className="font-medium text-info">Blue</span> = incoming hire who hasn't
             started. <span className="font-medium text-warning">Moving</span> = slated to an
-            upcoming site, so this seat will need backfill.
+            upcoming site, so this seat will need backfill.{' '}
+            <span className="font-medium text-success">Bench</span> = ranked successors from Bench
+            &amp; Risk — a plan for the seat, not counted as fill.
           </p>
         </div>
       </div>
@@ -176,6 +184,11 @@ function SeatRow({ node, depth }: { node: OrgNode; depth: number }) {
               )}
             </span>
           ))
+        )}
+        {node.benchNames.length > 0 && (
+          <span className="text-[11px] font-medium text-success">
+            bench: {node.benchNames.join(', ')}
+          </span>
         )}
       </li>
       {node.children.map((c) => (
