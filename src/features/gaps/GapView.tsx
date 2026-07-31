@@ -20,6 +20,7 @@ import {
   UserMinus,
 } from 'lucide-react'
 import { ImportPanel } from './ImportPanel'
+import { CurrentRosterPanel } from './CurrentRosterPanel'
 import { actorFrom } from '../../lib/activity'
 import { errText } from '../../lib/errText'
 import {
@@ -96,6 +97,8 @@ export function GapView({ session, profile }: GapViewProps) {
   // Incoming hires are named but haven't started — a maybe. They count as
   // fill by default; this toggle treats their seats as open instead.
   const [excludeIncoming, setExcludeIncoming] = useState(false)
+  // Clicking a location name in the company table opens its roster overlay.
+  const [rosterLoc, setRosterLoc] = useState<GapLocation | null>(null)
 
   const loadReqs = useCallback(() => {
     fetchRoleRequirements().then(setReqs).catch((e: Error) => setError(e.message))
@@ -564,7 +567,18 @@ export function GapView({ session, profile }: GapViewProps) {
                 ) : (
                   sortedCompany.map((g, i) => (
                     <tr key={i} className="border-b border-surface-line/60 last:border-0">
-                      <td className="px-4 py-2.5 font-medium">{g.location_name}</td>
+                      <td className="px-4 py-2.5">
+                        <button
+                          onClick={() => {
+                            const l = locations.find((x) => x.id === g.location_id)
+                            if (l) setRosterLoc(l)
+                          }}
+                          title="View this location's current roster"
+                          className="text-left font-medium hover:text-cg-orange hover:underline"
+                        >
+                          {g.location_name}
+                        </button>
+                      </td>
                       <td className="px-4 py-2.5">
                         {g.position_name}
                         {g.kind === 'group' && (
@@ -704,6 +718,8 @@ export function GapView({ session, profile }: GapViewProps) {
           </table>
         </div>
       )}
+
+      {rosterLoc && <CurrentRosterPanel location={rosterLoc} onClose={() => setRosterLoc(null)} />}
     </div>
   )
 }
