@@ -204,7 +204,7 @@ export function GapView({ session, profile }: GapViewProps) {
             gap: Math.max(0, r.min_count - f.count),
           }
         })
-        return { id: g.id, name: g.name, total_min: g.total_min, current: gg.filledTotal, gap: gg.gap, detail: gg.detail, members }
+        return { id: g.id, name: g.name, total_min: g.total_min, current: gg.filledTotal, gap: gg.gap, members }
       })
   }, [effGroups, fill, pickedRoles])
 
@@ -293,13 +293,23 @@ export function GapView({ session, profile }: GapViewProps) {
               gap: r.gap,
               names: r.names,
             })),
-            ...groupRows.map((g) => ({
-              position_name: `${g.name} (pool)`,
-              required_count: g.total_min,
-              current: g.current,
-              gap: g.gap,
-              names: [g.detail],
-            })),
+            ...groupRows.flatMap((g) => [
+              {
+                position_name: `${g.name} (pool)`,
+                required_count: g.total_min,
+                current: g.current,
+                gap: g.gap,
+                names: [`any mix of the roles below, ${g.total_min} total`],
+              },
+              ...g.members.map((m) => ({
+                position_name: m.position_name,
+                required_count: m.min_count > 0 ? `${m.min_count} min` : '—',
+                current: m.current,
+                gap: m.min_count > 0 ? m.gap : '—',
+                names: m.names,
+                indent: true,
+              })),
+            ]),
           ],
           totals,
           generatedOn: new Date().toLocaleDateString(),
