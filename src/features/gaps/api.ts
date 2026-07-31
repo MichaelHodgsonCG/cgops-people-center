@@ -353,6 +353,7 @@ export async function fetchGapLocations(): Promise<GapLocation[]> {
 }
 
 export type GapReason = 'new-site' | 'backfill' | 'understaffed'
+export type GapPriority = 'high' | 'medium' | 'low'
 
 export interface CompanyGap {
   location_id: string
@@ -371,6 +372,11 @@ export interface CompanyGap {
   detail: string // movers "Name → Dest" (backfill), slated names (new-site), or ''
   incoming_names?: string[] // named hires here who haven't started — the maybes
   bench_names?: string[] // ranked successors for the seat, e.g. "Dinesh (#1)" — a plan, not fill
+  // When the seat must be filled: the staffing deadline (handover date) of the
+  // opening site (new-site), or of the mover's destination (backfill) — the
+  // firm date set in Restaurant Center. null = now / not scheduled.
+  needed_by: string | null
+  priority: GapPriority
 }
 
 /** Company-wide missing roles across every location, accounting for moves: an
@@ -382,10 +388,14 @@ export interface CompanyGap {
  * includeIncoming: whether named hires who haven't started yet count as fill.
  * Either way their names are surfaced on the rows via incoming_names. */
 export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyGap[]> {
-  const [reqs, groups, locs, assignRes, slotRes] = await Promise.all([
+  const [reqs, groups, locs, siteRes, assignRes, slotRes] = await Promise.all([
     fetchRoleRequirements(),
     fetchRequirementGroups(),
     fetchGapLocations(),
+    // Staffing deadlines: Restaurant Center's opening_sites (handover date,
+    // falling back to opening date), matched to locations by name — the same
+    // link the Upcoming page uses (opening_sites carries no location id).
+    supabase.from('opening_sites').select('name, handover_date, opening_date'),
     supabase
       .from('people_center_position_assignments')
       .select(
@@ -406,8 +416,38 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
   ])
   if (assignRes.error) throw assignRes.error
   if (slotRes.error) throw slotRes.error
+  if (siteRes.error) throw siteRes.error
 
   const key = (locId: string, posId: string) => `${locId}|${posId}`
+
+  // location name (normalized) -> staffing deadline (ISO date)
+  const norm = (s: string) => s.trim().toLowerCase()
+  const deadlineByName = new Map<string, string>()
+  type Site = { name: string | null; handover_date: string | null; opening_date: string | null }
+  for (const s of (siteRes.data as unknown as Site[]) ?? []) {
+    const d = s.handover_date ?? s.opening_date
+    if (s.name && d) deadlineByName.set(norm(s.name), d)
+  }
+
+  // Priority is computed, not stored, so it never goes stale:
+  //  high   — needed now/within 60 days with NO plan (no bench, no incoming),
+  //           or a senior seat (GM/CdC, level <= 20) with no plan at any date
+  //  medium — needed soon but a plan exists, or unplanned further out
+  //  low    — far out with a plan
+  // An unknown date counts as urgent: with nothing scheduled it can't be deferred.
+  const todayMs = Date.now()
+  const priorityFor = (
+    neededBy: string | null,
+    level: number | null,
+    hasPlan: boolean,
+  ): GapPriority => {
+    const days = neededBy ? Math.round((Date.parse(neededBy) - todayMs) / 86400000) : 0
+    const urgent = !neededBy || days <= 60
+    const senior = (level ?? 99) <= 20
+    if (!hasPlan && (urgent || senior)) return 'high'
+    if (urgent || !hasPlan) return 'medium'
+    return 'low'
+  }
 
   // Current seats at OPEN locations, and everyone's origin (person → their seat).
   type A = {
@@ -504,8 +544,11 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
       const gap = Math.max(0, r.required_count - projected)
       if (gap <= 0) continue
       const incomingNames = people.filter((p) => p.incoming).map((p) => p.name)
+      const benchNames = benchFor(loc.id, [r.position_id])
+      const hasPlan = incomingNames.length > 0 || benchNames.length > 0
       if (loc.status === 'opening') {
         const named = people.filter((p) => !p.incoming).map((p) => p.name)
+        const neededBy = deadlineByName.get(norm(loc.name)) ?? null
         out.push({
           location_id: loc.id,
           location_name: loc.name,
@@ -520,11 +563,20 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
           reason: 'new-site',
           detail: named.length ? `named: ${named.join(', ')}` : '',
           incoming_names: incomingNames,
-          bench_names: benchFor(loc.id, [r.position_id]),
+          bench_names: benchNames,
+          needed_by: neededBy,
+          priority: priorityFor(neededBy, r.level, hasPlan),
         })
       } else {
         const k = key(loc.id, r.position_id)
         const movers = (curByCell.get(k) ?? []).filter((p) => moverDest.has(p.id))
+        // Backfill deadline = the earliest destination's staffing deadline —
+        // the seat opens the day its holder leaves. Understaffed = now (null).
+        const neededBy =
+          movers
+            .map((m) => deadlineByName.get(norm(moverDest.get(m.id) ?? '')))
+            .filter((d): d is string => Boolean(d))
+            .sort()[0] ?? null
         out.push({
           location_id: loc.id,
           location_name: loc.name,
@@ -539,7 +591,9 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
           reason: movers.length > 0 ? 'backfill' : 'understaffed',
           detail: movers.map((m) => `${m.name} → ${moverDest.get(m.id)}`).join(', '),
           incoming_names: incomingNames,
-          bench_names: benchFor(loc.id, [r.position_id]),
+          bench_names: benchNames,
+          needed_by: neededBy,
+          priority: priorityFor(neededBy, r.level, hasPlan),
         })
       }
     }
@@ -555,6 +609,10 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
       }
       const { gap, filledTotal, detail } = groupGap(g, filledByPos)
       if (gap > 0) {
+        const benchNames = benchFor(loc.id, g.roles.map((r) => r.position_id))
+        const hasPlan = incomingNames.length > 0 || benchNames.length > 0
+        const neededBy = loc.status === 'opening' ? deadlineByName.get(norm(loc.name)) ?? null : null
+        const level = Math.min(...g.roles.map((r) => r.level ?? Infinity))
         out.push({
           location_id: loc.id,
           location_name: loc.name,
@@ -564,14 +622,16 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
           position_name: g.name,
           member_position_ids: g.roles.map((r) => r.position_id),
           overrides_group_id: g.overrides_group_id,
-          level: Math.min(...g.roles.map((r) => r.level ?? Infinity)),
+          level,
           required: g.total_min,
           projected: filledTotal,
           gap,
           reason: loc.status === 'opening' ? 'new-site' : 'understaffed',
           detail,
           incoming_names: incomingNames,
-          bench_names: benchFor(loc.id, g.roles.map((r) => r.position_id)),
+          bench_names: benchNames,
+          needed_by: neededBy,
+          priority: priorityFor(neededBy, Number.isFinite(level) ? level : null, hasPlan),
         })
       }
     }

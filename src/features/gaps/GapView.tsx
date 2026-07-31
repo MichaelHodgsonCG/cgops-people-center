@@ -43,6 +43,7 @@ import {
   type CompanyGap,
   type Fill,
   type GapLocation,
+  type GapPriority,
   type GapReason,
   type MgmtPosition,
   type RequirementGroup,
@@ -64,7 +65,23 @@ const REASON_CLASS: Record<GapReason, string> = {
 }
 const REASON_ORDER: Record<GapReason, number> = { 'new-site': 0, backfill: 1, understaffed: 2 }
 
-type CompanySortKey = 'location' | 'role' | 'gap' | 'type'
+const PRIORITY_ORDER: Record<GapPriority, number> = { high: 0, medium: 1, low: 2 }
+const PRIORITY_CLASS: Record<GapPriority, string> = {
+  high: 'bg-danger/10 text-danger',
+  medium: 'bg-warning/10 text-warning',
+  low: 'bg-surface-muted text-charcoal/50',
+}
+const PRIORITY_TITLE =
+  'High = needed now/within 60 days (or a senior seat) with no plan · Medium = needed soon with a plan, or unplanned further out · Low = far out with a plan'
+
+const fmtDate = (iso: string) =>
+  new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  })
+
+type CompanySortKey = 'location' | 'role' | 'gap' | 'type' | 'priority' | 'needed'
 
 interface GapViewProps {
   session: Session
@@ -92,7 +109,7 @@ export function GapView({ session, profile }: GapViewProps) {
   const [error, setError] = useState<string | null>(null)
   const [showConfig, setShowConfig] = useState(false)
   const [exporting, setExporting] = useState(false)
-  const [sortKey, setSortKey] = useState<CompanySortKey>('type')
+  const [sortKey, setSortKey] = useState<CompanySortKey>('priority')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [importing, setImporting] = useState(false)
   // Incoming hires are named but haven't started — a maybe. They count as
@@ -323,6 +340,15 @@ export function GapView({ session, profile }: GapViewProps) {
         case 'type':
           cmp = REASON_ORDER[a.reason] - REASON_ORDER[b.reason]
           break
+        case 'priority':
+          // Within a priority tier, soonest need first ('' = ASAP sorts first).
+          cmp =
+            PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] ||
+            (a.needed_by ?? '').localeCompare(b.needed_by ?? '')
+          break
+        case 'needed':
+          cmp = (a.needed_by ?? '').localeCompare(b.needed_by ?? '')
+          break
       }
       // Stable, readable secondary ordering.
       return (
@@ -349,6 +375,8 @@ export function GapView({ session, profile }: GapViewProps) {
         await downloadCompanyGapXlsx({
           rows: sortedCompany.map((r) => ({
             ...r,
+            priority: r.priority.charAt(0).toUpperCase() + r.priority.slice(1),
+            needed_by: r.needed_by ?? (r.reason === 'understaffed' ? 'ASAP' : '—'),
             detail: [
               r.detail,
               r.incoming_names?.length ? `incoming: ${r.incoming_names.join(', ')}` : '',
@@ -558,6 +586,11 @@ export function GapView({ session, profile }: GapViewProps) {
       {!single ? (
         <>
           <div className="mb-3 flex flex-wrap gap-2 text-xs">
+            <Summary
+              label="High priority"
+              n={visibleCompany.filter((g) => g.priority === 'high').reduce((s, g) => s + g.gap, 0)}
+              cls="bg-danger text-white"
+            />
             <Summary label="New-site" n={companyByReason['new-site']} cls={REASON_CLASS['new-site']} />
             <Summary label="Backfill" n={companyByReason.backfill} cls={REASON_CLASS.backfill} />
             <Summary label="Understaffed" n={companyByReason.understaffed} cls={REASON_CLASS.understaffed} />
@@ -570,6 +603,8 @@ export function GapView({ session, profile }: GapViewProps) {
                   <SortHeader label="Location" k="location" sortKey={sortKey} dir={sortDir} onSort={toggleSort} />
                   <SortHeader label="Role" k="role" sortKey={sortKey} dir={sortDir} onSort={toggleSort} />
                   <SortHeader label="Gap" k="gap" sortKey={sortKey} dir={sortDir} onSort={toggleSort} center />
+                  <SortHeader label="Priority" k="priority" sortKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                  <SortHeader label="Needed by" k="needed" sortKey={sortKey} dir={sortDir} onSort={toggleSort} />
                   <SortHeader label="Type" k="type" sortKey={sortKey} dir={sortDir} onSort={toggleSort} />
                   <th className="px-4 py-3 font-medium">Detail</th>
                 </tr>
@@ -577,7 +612,7 @@ export function GapView({ session, profile }: GapViewProps) {
               <tbody>
                 {sortedCompany.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-4 py-6 text-center text-sm text-success">
+                    <td colSpan={7} className="px-4 py-6 text-center text-sm text-success">
                       No gaps — every required seat is filled or slated.
                     </td>
                   </tr>
@@ -605,6 +640,27 @@ export function GapView({ session, profile }: GapViewProps) {
                         )}
                       </td>
                       <td className="px-4 py-2.5 text-center font-medium text-danger">{g.gap}</td>
+                      <td className="px-4 py-2.5">
+                        <span
+                          title={PRIORITY_TITLE}
+                          className={`rounded-full px-2 py-0.5 text-[11px] font-medium capitalize ${PRIORITY_CLASS[g.priority]}`}
+                        >
+                          {g.priority}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-xs whitespace-nowrap">
+                        {g.needed_by ? (
+                          <span className={Date.parse(g.needed_by) < Date.now() ? 'font-medium text-danger' : ''}>
+                            {fmtDate(g.needed_by)}
+                          </span>
+                        ) : g.reason === 'understaffed' ? (
+                          <span className="font-medium text-danger">ASAP</span>
+                        ) : (
+                          <span className="text-charcoal/40" title="No staffing deadline scheduled in Restaurant Center">
+                            —
+                          </span>
+                        )}
+                      </td>
                       <td className="px-4 py-2.5">
                         <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${REASON_CLASS[g.reason]}`}>
                           {REASON_LABEL[g.reason]}
