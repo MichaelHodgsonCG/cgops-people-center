@@ -282,8 +282,27 @@ export function resolveGroupRequirements(
   return [...globals, ...locGroups]
 }
 
-/** Gap for one pooled group given how many of each role are filled:
- *  max( total_min − filledTotal,  Σ per-role min shortfalls ). */
+/** People counting toward a pool role's minimum: that role plus any pool role
+ * at the same or a more senior level (lower level number) — a Senior Sous
+ * satisfies a Sous minimum. Roles without a level rank as most junior. */
+export function minCover(
+  group: RequirementGroup,
+  role: GroupRole,
+  filledByPosition: Map<string, number>,
+): number {
+  const lvl = (r: GroupRole) => r.level ?? Infinity
+  return group.roles.reduce(
+    (s, o) => (lvl(o) <= lvl(role) ? s + (filledByPosition.get(o.position_id) ?? 0) : s),
+    0,
+  )
+}
+
+/** Gap for one pooled group given how many of each role are filled. Minimums
+ * count seniority-down (see minCover), which makes them NESTED thresholds:
+ * each junior minimum's covering set contains every senior one's. The bodies
+ * needed for the minimums is therefore the LARGEST at-or-above shortfall —
+ * one senior hire counts toward every junior minimum — not their sum.
+ * Overall gap = max( total_min − filledTotal, that largest shortfall ). */
 export function groupGap(
   group: RequirementGroup,
   filledByPosition: Map<string, number>,
@@ -295,15 +314,16 @@ export function groupGap(
     const f = filledByPosition.get(r.position_id) ?? 0
     filledTotal += f
     if (r.min_count > 0) {
-      minShort += Math.max(0, r.min_count - f)
-      parts.push(`${r.position_name} ${f}/${r.min_count} min`)
+      const cover = minCover(group, r, filledByPosition)
+      minShort = Math.max(minShort, r.min_count - cover)
+      parts.push(`${r.position_name} ${cover}/${r.min_count} min`)
     } else {
       parts.push(`${r.position_name} ${f}`)
     }
   }
   const totalShort = Math.max(0, group.total_min - filledTotal)
   return {
-    gap: Math.max(totalShort, minShort),
+    gap: Math.max(totalShort, minShort, 0),
     filledTotal,
     detail: `have ${filledTotal}/${group.total_min}${parts.length ? ` · ${parts.join(', ')}` : ''}`,
   }
