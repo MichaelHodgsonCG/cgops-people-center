@@ -369,14 +369,18 @@ export interface CompanyGap {
   gap: number
   reason: GapReason
   detail: string // movers "Name → Dest" (backfill), slated names (new-site), or ''
+  incoming_names?: string[] // named hires here who haven't started — the maybes
 }
 
 /** Company-wide missing roles across every location, accounting for moves: an
  * existing leader slated to a new site vacates their current seat, creating a
  * backfill gap at the origin. Three kinds: new-site (upcoming seats not yet
  * slated), backfill (open site losing someone to a new site), understaffed
- * (open site already below the required roster). */
-export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
+ * (open site already below the required roster).
+ *
+ * includeIncoming: whether named hires who haven't started yet count as fill.
+ * Either way their names are surfaced on the rows via incoming_names. */
+export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyGap[]> {
   const [reqs, groups, locs, assignRes, slotRes] = await Promise.all([
     fetchRoleRequirements(),
     fetchRequirementGroups(),
@@ -409,26 +413,22 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
     person: { id: string; full_name: string; status: string } | null
     location: { id: string; status: string } | null
   }
-  const curByCell = new Map<string, { id: string; name: string }[]>()
+  type CellPerson = { id: string; name: string; incoming: boolean }
+  const curByCell = new Map<string, CellPerson[]>()
   // Incoming/active external hires assigned to an OPENING site — they belong on
   // that site's future roster alongside slated leaders (unioned + de-duped by
   // person below), so the "add incoming hire" flow works for upcoming sites.
-  const openingAsgByCell = new Map<string, { id: string; name: string }[]>()
+  const openingAsgByCell = new Map<string, CellPerson[]>()
   for (const a of (assignRes.data as unknown as A[]) ?? []) {
     if (!a.position_id || !a.location || !a.person) continue
     const k = key(a.location.id, a.position_id)
-    if (a.location.status === 'open') {
-      if (a.person.status !== 'active' && a.person.status !== 'leave') continue
-      const arr = curByCell.get(k) ?? []
-      arr.push({ id: a.person.id, name: a.person.full_name })
-      curByCell.set(k, arr)
-    } else if (a.location.status === 'opening') {
-      const st = a.person.status
-      if (st !== 'incoming' && st !== 'active' && st !== 'leave') continue
-      const arr = openingAsgByCell.get(k) ?? []
-      arr.push({ id: a.person.id, name: a.person.full_name })
-      openingAsgByCell.set(k, arr)
-    }
+    const st = a.person.status
+    if (st !== 'incoming' && st !== 'active' && st !== 'leave') continue
+    const cell = a.location.status === 'open' ? curByCell : a.location.status === 'opening' ? openingAsgByCell : null
+    if (!cell) continue
+    const arr = cell.get(k) ?? []
+    arr.push({ id: a.person.id, name: a.person.full_name, incoming: st === 'incoming' })
+    cell.set(k, arr)
   }
 
   // Slated leaders at OPENING locations → the future fill there, and the set of
@@ -436,35 +436,37 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
   type S = {
     position_id: string | null
     incumbent_person_id: string | null
-    incumbent: { full_name: string } | null
+    incumbent: { full_name: string; status: string } | null
     location: { id: string; name: string; status: string } | null
   }
-  const slatedByCell = new Map<string, { id: string; name: string }[]>()
+  const slatedByCell = new Map<string, CellPerson[]>()
   const moverDest = new Map<string, string>()
   for (const s of (slotRes.data as unknown as S[]) ?? []) {
     if (!s.position_id || !s.location || s.location.status !== 'opening') continue
     if (!s.incumbent_person_id || !s.incumbent) continue
     const k = key(s.location.id, s.position_id)
     const arr = slatedByCell.get(k) ?? []
-    arr.push({ id: s.incumbent_person_id, name: s.incumbent.full_name })
+    arr.push({ id: s.incumbent_person_id, name: s.incumbent.full_name, incoming: s.incumbent.status === 'incoming' })
     slatedByCell.set(k, arr)
     moverDest.set(s.incumbent_person_id, s.location.name)
   }
 
-  // Projected fill of one (location, position): open → current staff minus
-  // movers; opening → slated ∪ incoming, de-duped by person. Shared by the
-  // single-role rows and the group evaluation.
-  const projectedFill = (loc: GapLocation, positionId: string): number => {
+  // Everyone attached to one (location, position): open → current staff minus
+  // movers; opening → slated ∪ assigned hires, de-duped by person. Shared by
+  // the single-role rows and the group evaluation. The incoming flag marks
+  // hires who haven't started; whether they count is includeIncoming's call.
+  const cellPeople = (loc: GapLocation, positionId: string): CellPerson[] => {
     const k = key(loc.id, positionId)
     if (loc.status === 'opening') {
-      const ids = new Set<string>()
-      for (const p of slatedByCell.get(k) ?? []) ids.add(p.id)
-      for (const p of openingAsgByCell.get(k) ?? []) ids.add(p.id)
-      return ids.size
+      const byId = new Map<string, CellPerson>()
+      for (const p of slatedByCell.get(k) ?? []) byId.set(p.id, p)
+      for (const p of openingAsgByCell.get(k) ?? []) if (!byId.has(p.id)) byId.set(p.id, p)
+      return [...byId.values()]
     }
-    const cur = curByCell.get(k) ?? []
-    return cur.length - cur.filter((p) => moverDest.has(p.id)).length
+    return (curByCell.get(k) ?? []).filter((p) => !moverDest.has(p.id))
   }
+  const projectedFill = (loc: GapLocation, positionId: string): number =>
+    cellPeople(loc, positionId).filter((p) => includeIncoming || !p.incoming).length
 
   const out: CompanyGap[] = []
   for (const loc of locs) {
@@ -479,52 +481,46 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
     )
 
     for (const r of required) {
-      const k = key(loc.id, r.position_id)
+      const people = cellPeople(loc, r.position_id)
+      const projected = people.filter((p) => includeIncoming || !p.incoming).length
+      const gap = Math.max(0, r.required_count - projected)
+      if (gap <= 0) continue
+      const incomingNames = people.filter((p) => p.incoming).map((p) => p.name)
       if (loc.status === 'opening') {
-        // Future roster = slated leaders ∪ incoming/active hires assigned here,
-        // de-duped by person (someone both slated and assigned counts once).
-        const byId = new Map<string, string>()
-        for (const p of slatedByCell.get(k) ?? []) byId.set(p.id, p.name)
-        for (const p of openingAsgByCell.get(k) ?? []) byId.set(p.id, p.name)
-        const names = [...byId.values()]
-        const gap = Math.max(0, r.required_count - byId.size)
-        if (gap > 0) {
-          out.push({
-            location_id: loc.id,
-            location_name: loc.name,
-            location_status: 'opening',
-            kind: 'role',
-            position_id: r.position_id,
-            position_name: r.position_name,
-            level: r.level,
-            required: r.required_count,
-            projected: byId.size,
-            gap,
-            reason: 'new-site',
-            detail: names.length ? `named: ${names.join(', ')}` : '',
-          })
-        }
+        const named = people.filter((p) => !p.incoming).map((p) => p.name)
+        out.push({
+          location_id: loc.id,
+          location_name: loc.name,
+          location_status: 'opening',
+          kind: 'role',
+          position_id: r.position_id,
+          position_name: r.position_name,
+          level: r.level,
+          required: r.required_count,
+          projected,
+          gap,
+          reason: 'new-site',
+          detail: named.length ? `named: ${named.join(', ')}` : '',
+          incoming_names: incomingNames,
+        })
       } else {
-        const cur = curByCell.get(k) ?? []
-        const movers = cur.filter((p) => moverDest.has(p.id))
-        const projected = cur.length - movers.length
-        const gap = Math.max(0, r.required_count - projected)
-        if (gap > 0) {
-          out.push({
-            location_id: loc.id,
-            location_name: loc.name,
-            location_status: 'open',
-            kind: 'role',
-            position_id: r.position_id,
-            position_name: r.position_name,
-            level: r.level,
-            required: r.required_count,
-            projected,
-            gap,
-            reason: movers.length > 0 ? 'backfill' : 'understaffed',
-            detail: movers.map((m) => `${m.name} → ${moverDest.get(m.id)}`).join(', '),
-          })
-        }
+        const k = key(loc.id, r.position_id)
+        const movers = (curByCell.get(k) ?? []).filter((p) => moverDest.has(p.id))
+        out.push({
+          location_id: loc.id,
+          location_name: loc.name,
+          location_status: 'open',
+          kind: 'role',
+          position_id: r.position_id,
+          position_name: r.position_name,
+          level: r.level,
+          required: r.required_count,
+          projected,
+          gap,
+          reason: movers.length > 0 ? 'backfill' : 'understaffed',
+          detail: movers.map((m) => `${m.name} → ${moverDest.get(m.id)}`).join(', '),
+          incoming_names: incomingNames,
+        })
       }
     }
 
@@ -532,7 +528,11 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
     for (const g of locGroups) {
       if (g.roles.length === 0) continue
       const filledByPos = new Map<string, number>()
-      for (const gr of g.roles) filledByPos.set(gr.position_id, projectedFill(loc, gr.position_id))
+      const incomingNames: string[] = []
+      for (const gr of g.roles) {
+        filledByPos.set(gr.position_id, projectedFill(loc, gr.position_id))
+        for (const p of cellPeople(loc, gr.position_id)) if (p.incoming) incomingNames.push(p.name)
+      }
       const { gap, filledTotal, detail } = groupGap(g, filledByPos)
       if (gap > 0) {
         out.push({
@@ -550,6 +550,7 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
           gap,
           reason: loc.status === 'opening' ? 'new-site' : 'understaffed',
           detail,
+          incoming_names: incomingNames,
         })
       }
     }
@@ -565,23 +566,35 @@ export async function fetchCompanyGaps(): Promise<CompanyGap[]> {
 }
 
 export interface Fill {
-  count: number
+  count: number // started people: active or on leave
   names: string[]
+  // Named hires who haven't started yet — a "maybe" until their start date.
+  // Callers decide whether they count (the gap view's Exclude incoming toggle).
+  incomingCount: number
+  incomingNames: string[]
 }
 
-/** Who fills each role at a location. Open site → active people currently
- * assigned there; opening site → slated leaders (succession incumbents). Keyed
- * by position_id. */
+export const EMPTY_FILL: Fill = { count: 0, names: [], incomingCount: 0, incomingNames: [] }
+
+/** Who fills each role at a location. Open site → people currently assigned
+ * there (started people and incoming hires tracked separately); opening site →
+ * slated leaders (succession incumbents) plus assigned hires. Keyed by
+ * position_id. */
 export async function fetchFillForLocation(
   locationId: string,
   upcoming: boolean,
 ): Promise<Map<string, Fill>> {
   const map = new Map<string, Fill>()
-  const add = (positionId: string | null, name: string | null) => {
+  const add = (positionId: string | null, name: string | null, incoming: boolean) => {
     if (!positionId) return
-    const f = map.get(positionId) ?? { count: 0, names: [] }
-    f.count += 1
-    if (name) f.names.push(name)
+    const f = map.get(positionId) ?? { count: 0, names: [], incomingCount: 0, incomingNames: [] }
+    if (incoming) {
+      f.incomingCount += 1
+      if (name) f.incomingNames.push(name)
+    } else {
+      f.count += 1
+      if (name) f.names.push(name)
+    }
     map.set(positionId, f)
   }
 
@@ -592,20 +605,25 @@ export async function fetchFillForLocation(
     // counts once. Before opening, the whole roster is a future fill, so an
     // incoming hire assigned here belongs on it just like a slated leader.
     const seen = new Map<string, Set<string>>() // position_id -> person ids
-    const addUnique = (positionId: string | null, personId: string | null, name: string | null) => {
+    const addUnique = (
+      positionId: string | null,
+      personId: string | null,
+      name: string | null,
+      incoming: boolean,
+    ) => {
       if (!positionId || !personId) return
       const s = seen.get(positionId) ?? new Set<string>()
       if (s.has(personId)) return
       s.add(personId)
       seen.set(positionId, s)
-      add(positionId, name)
+      add(positionId, name, incoming)
     }
     const [slotRes, asgRes] = await Promise.all([
       supabase
         .from('people_center_succession_slots')
         .select(
           `position_id,
-           incumbent:people_center_people!people_center_succession_slots_incumbent_person_id_fkey ( id, full_name )`,
+           incumbent:people_center_people!people_center_succession_slots_incumbent_person_id_fkey ( id, full_name, status )`,
         )
         .eq('location_id', locationId),
       supabase
@@ -617,9 +635,13 @@ export async function fetchFillForLocation(
     ])
     if (slotRes.error) throw slotRes.error
     if (asgRes.error) throw asgRes.error
-    type SlotRow = { position_id: string | null; incumbent: { id: string; full_name: string } | null }
+    type SlotRow = {
+      position_id: string | null
+      incumbent: { id: string; full_name: string; status: string } | null
+    }
     for (const r of (slotRes.data as unknown as SlotRow[]) ?? []) {
-      if (r.incumbent?.id) addUnique(r.position_id, r.incumbent.id, r.incumbent.full_name)
+      if (r.incumbent?.id)
+        addUnique(r.position_id, r.incumbent.id, r.incumbent.full_name, r.incumbent.status === 'incoming')
     }
     type AsgRow = {
       position_id: string | null
@@ -628,7 +650,7 @@ export async function fetchFillForLocation(
     for (const r of (asgRes.data as unknown as AsgRow[]) ?? []) {
       const st = r.person?.status
       if (r.person && (st === 'incoming' || st === 'active' || st === 'leave')) {
-        addUnique(r.position_id, r.person.id, r.person.full_name)
+        addUnique(r.position_id, r.person.id, r.person.full_name, st === 'incoming')
       }
     }
     return map
@@ -650,10 +672,12 @@ export async function fetchFillForLocation(
   }
   for (const r of (data as unknown as Row[]) ?? []) {
     // A person's PRIMARY seat counts (matches the company-wide computation, so
-    // the two views never disagree). Employed people only (active/leave).
-    if (r.person && (r.person.status === 'active' || r.person.status === 'leave')) {
-      add(r.position_id, r.person.full_name)
-    }
+    // the two views never disagree). Started people (active/leave) fill the
+    // seat; incoming hires are tracked separately as maybes.
+    if (!r.person) continue
+    const st = r.person.status
+    if (st === 'active' || st === 'leave') add(r.position_id, r.person.full_name, false)
+    else if (st === 'incoming') add(r.position_id, r.person.full_name, true)
   }
   return map
 }
