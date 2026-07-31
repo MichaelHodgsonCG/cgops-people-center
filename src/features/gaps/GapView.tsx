@@ -30,6 +30,7 @@ import {
   fetchRequirementGroups,
   fetchRoleRequirements,
   groupGap,
+  minCover,
   resolveGroupRequirements,
   resolveSingleRequirements,
   clearRoleRequirement,
@@ -225,13 +226,17 @@ export function GapView({ session, profile }: GapViewProps) {
         const gg = groupGap(g, filledByPos)
         const members = g.roles.map((r) => {
           const f = fill.get(r.position_id) ?? { count: 0, names: [] }
+          // A minimum counts this role plus more senior pool roles, so a
+          // Senior Sous can cover a Sous minimum.
+          const cover = minCover(g, r, filledByPos)
           return {
             position_id: r.position_id,
             position_name: r.position_name,
             min_count: r.min_count,
             current: f.count,
             names: f.names,
-            gap: Math.max(0, r.min_count - f.count),
+            seniorCovered: r.min_count > 0 && f.count < r.min_count && cover >= r.min_count,
+            gap: Math.max(0, r.min_count - cover),
           }
         })
         return { id: g.id, name: g.name, total_min: g.total_min, current: gg.filledTotal, gap: gg.gap, members }
@@ -337,7 +342,7 @@ export function GapView({ session, profile }: GapViewProps) {
                 position_name: m.position_name,
                 required_count: m.min_count > 0 ? `${m.min_count} min` : '—',
                 current: m.current,
-                gap: m.min_count > 0 ? m.gap : '—',
+                gap: m.min_count > 0 ? (m.seniorCovered && m.gap === 0 ? 'OK (senior covers)' : m.gap) : '—',
                 names: m.names,
                 indent: true,
               })),
@@ -606,8 +611,11 @@ export function GapView({ session, profile }: GapViewProps) {
                               short {m.gap}
                             </span>
                           ) : (
-                            <span className="rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success">
-                              OK
+                            <span
+                              className="rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success"
+                              title={m.seniorCovered ? 'Minimum met counting a more senior pool role' : undefined}
+                            >
+                              OK{m.seniorCovered ? ' ↑' : ''}
                             </span>
                           )
                         ) : (
@@ -1017,6 +1025,10 @@ function GroupEditor({
       <p className="mb-2 text-xs font-medium uppercase tracking-wide text-charcoal/50">
         Pooled groups — a total across roles, with per-role minimums
       </p>
+      <p className="mb-2 text-[11px] text-charcoal/55">
+        A minimum counts people in that role <em>or any more senior role in the pool</em> — e.g.
+        “Sous ≥ 2” is satisfied by one Sous plus one Senior Sous.
+      </p>
       {groups.length === 0 && !editing && (
         <p className="mb-2 text-xs text-charcoal/55">
           None yet. Example: “Kitchen line” = 5 total across Senior Sous / Sous / Chef de Partie,
@@ -1181,7 +1193,7 @@ function GroupForm({
         </label>
       </div>
       <p className="mt-2 text-[11px] uppercase tracking-wide text-charcoal/40">
-        Roles in this pool (tick, then set a minimum)
+        Roles in this pool (tick, then set a minimum — more senior pool roles count toward it)
       </p>
       <div className="mt-1 grid gap-1 sm:grid-cols-2">
         {mgmt.map((m) => {
