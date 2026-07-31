@@ -682,6 +682,127 @@ export async function fetchFillForLocation(
   return map
 }
 
+// --- Current roster overlay --------------------------------------------------
+
+export interface RosterPerson {
+  name: string
+  incoming: boolean // named hire who hasn't started yet
+  movingTo: string | null // slated to an upcoming site — leaving opens this seat
+}
+
+/** Everyone at a location for the roster overlay, keyed by position_id. Open
+ * site → current primary assignments (started people and incoming hires), each
+ * flagged when slated to move to an upcoming site (the knock-on backfill).
+ * Opening site → slated leaders ∪ assigned hires, like fetchFillForLocation. */
+export async function fetchLocationRoster(
+  locationId: string,
+  upcoming: boolean,
+): Promise<Map<string, RosterPerson[]>> {
+  const map = new Map<string, RosterPerson[]>()
+  const add = (positionId: string | null, p: RosterPerson) => {
+    if (!positionId) return
+    const arr = map.get(positionId) ?? []
+    arr.push(p)
+    map.set(positionId, arr)
+  }
+
+  if (upcoming) {
+    const seen = new Map<string, Set<string>>() // position_id -> person ids
+    const addUnique = (
+      positionId: string | null,
+      personId: string | null,
+      name: string | null,
+      incoming: boolean,
+    ) => {
+      if (!positionId || !personId || !name) return
+      const s = seen.get(positionId) ?? new Set<string>()
+      if (s.has(personId)) return
+      s.add(personId)
+      seen.set(positionId, s)
+      add(positionId, { name, incoming, movingTo: null })
+    }
+    const [slotRes, asgRes] = await Promise.all([
+      supabase
+        .from('people_center_succession_slots')
+        .select(
+          `position_id,
+           incumbent:people_center_people!people_center_succession_slots_incumbent_person_id_fkey ( id, full_name, status )`,
+        )
+        .eq('location_id', locationId),
+      supabase
+        .from('people_center_position_assignments')
+        .select(`position_id, ended_on, person:people_center_people ( id, full_name, status )`)
+        .eq('location_id', locationId)
+        .eq('is_primary', true)
+        .is('ended_on', null),
+    ])
+    if (slotRes.error) throw slotRes.error
+    if (asgRes.error) throw asgRes.error
+    type SlotRow = {
+      position_id: string | null
+      incumbent: { id: string; full_name: string; status: string } | null
+    }
+    for (const r of (slotRes.data as unknown as SlotRow[]) ?? []) {
+      if (r.incumbent?.id)
+        addUnique(r.position_id, r.incumbent.id, r.incumbent.full_name, r.incumbent.status === 'incoming')
+    }
+    type AsgRow = {
+      position_id: string | null
+      person: { id: string; full_name: string; status: string } | null
+    }
+    for (const r of (asgRes.data as unknown as AsgRow[]) ?? []) {
+      const st = r.person?.status
+      if (r.person && (st === 'incoming' || st === 'active' || st === 'leave')) {
+        addUnique(r.position_id, r.person.id, r.person.full_name, st === 'incoming')
+      }
+    }
+    return map
+  }
+
+  const { data, error } = await supabase
+    .from('people_center_position_assignments')
+    .select(`position_id, ended_on, person:people_center_people ( id, full_name, status )`)
+    .eq('location_id', locationId)
+    .eq('is_primary', true)
+    .is('ended_on', null)
+  if (error) throw error
+  type Row = {
+    position_id: string | null
+    person: { id: string; full_name: string; status: string } | null
+  }
+  const rows = ((data as unknown as Row[]) ?? []).filter(
+    (r) => r.person && ['active', 'leave', 'incoming'].includes(r.person.status),
+  )
+
+  // Who among them is slated to an upcoming site — their move opens this seat.
+  const movingTo = new Map<string, string>()
+  const ids = rows.map((r) => r.person!.id)
+  if (ids.length > 0) {
+    const { data: slots, error: e2 } = await supabase
+      .from('people_center_succession_slots')
+      .select(`incumbent_person_id, location:people_center_locations ( name, status )`)
+      .in('incumbent_person_id', ids)
+    if (e2) throw e2
+    type SlotRow = {
+      incumbent_person_id: string | null
+      location: { name: string; status: string } | null
+    }
+    for (const s of (slots as unknown as SlotRow[]) ?? []) {
+      if (s.incumbent_person_id && s.location?.status === 'opening')
+        movingTo.set(s.incumbent_person_id, s.location.name)
+    }
+  }
+
+  for (const r of rows) {
+    add(r.position_id, {
+      name: r.person!.full_name,
+      incoming: r.person!.status === 'incoming',
+      movingTo: movingTo.get(r.person!.id) ?? null,
+    })
+  }
+  return map
+}
+
 // --- Excel round-trip: apply filled-in assignments as slated leaders ---------
 
 export interface SeatRef {
