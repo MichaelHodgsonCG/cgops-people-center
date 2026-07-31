@@ -78,8 +78,8 @@ export function GapView({ session, profile }: GapViewProps) {
   // Location selection: empty = all (company-wide); one = the detailed
   // single-location view; two+ = the company report filtered to that subset.
   const [picked, setPicked] = useState<Set<string>>(new Set())
-  // Role filter: empty = all roles; otherwise only these position_ids show
-  // (e.g. pick "Sous Chef" to see how many are needed across sites).
+  // Role filter: empty = all; otherwise a mix of position ids and pool (group)
+  // ids (e.g. pick "Sous Chef" or the whole "Kitchen line" pool).
   const [pickedRoles, setPickedRoles] = useState<Set<string>>(new Set())
   const [openMenu, setOpenMenu] = useState<null | 'loc' | 'role'>(null)
   const [fill, setFill] = useState<Map<string, Fill>>(new Map())
@@ -164,6 +164,30 @@ export function GapView({ session, profile }: GapViewProps) {
   const effSingles = useMemo(() => resolveSingleRequirements(reqs, single), [reqs, single])
   const effGroups = useMemo(() => resolveGroupRequirements(groups, single), [groups, single])
 
+  // Filter-menu items. Pools: global ones plus location-only ones — a location
+  // override is represented by the global pool it replaces, so picking a pool
+  // matches it at every site. Roles: single requirements plus pool members.
+  const poolItems = useMemo(
+    () => groups.filter((g) => g.overrides_group_id === null).map((g) => ({ id: g.id, name: g.name })),
+    [groups],
+  )
+  const roleItems = useMemo(() => {
+    const m = new Map<string, { id: string; name: string; level: number | null }>()
+    for (const r of reqs) {
+      if (r.required_count > 0 && !m.has(r.position_id))
+        m.set(r.position_id, { id: r.position_id, name: r.position_name, level: r.level })
+    }
+    for (const g of groups) {
+      for (const r of g.roles) {
+        if (!m.has(r.position_id))
+          m.set(r.position_id, { id: r.position_id, name: r.position_name, level: r.level })
+      }
+    }
+    return [...m.values()].sort(
+      (a, b) => (a.level ?? Infinity) - (b.level ?? Infinity) || a.name.localeCompare(b.name),
+    )
+  }, [reqs, groups])
+
   // Positions governed by a group are shown via the group, not as single roles.
   const groupMemberPos = useMemo(() => {
     const s = new Set<string>()
@@ -186,7 +210,13 @@ export function GapView({ session, profile }: GapViewProps) {
   // member position, so members read like ordinary roles.
   const groupRows = useMemo(() => {
     return effGroups
-      .filter((g) => pickedRoles.size === 0 || g.roles.some((r) => pickedRoles.has(r.position_id)))
+      .filter(
+        (g) =>
+          pickedRoles.size === 0 ||
+          pickedRoles.has(g.id) ||
+          (g.overrides_group_id !== null && pickedRoles.has(g.overrides_group_id)) ||
+          g.roles.some((r) => pickedRoles.has(r.position_id)),
+      )
       .map((g) => {
         const filledByPos = new Map<string, number>()
         for (const r of g.roles) {
@@ -227,7 +257,9 @@ export function GapView({ session, profile }: GapViewProps) {
         if (isMulti && !picked.has(g.location_id)) return false
         if (pickedRoles.size === 0) return true
         return g.kind === 'group'
-          ? (g.member_position_ids ?? []).some((id) => pickedRoles.has(id))
+          ? pickedRoles.has(g.position_id) ||
+              (g.overrides_group_id != null && pickedRoles.has(g.overrides_group_id)) ||
+              (g.member_position_ids ?? []).some((id) => pickedRoles.has(id))
           : pickedRoles.has(g.position_id)
       }),
     [company, isMulti, picked, pickedRoles],
@@ -395,7 +427,9 @@ export function GapView({ session, profile }: GapViewProps) {
             pickedRoles.size === 0
               ? 'All roles'
               : pickedRoles.size === 1
-                ? reqs.find((r) => r.position_id === [...pickedRoles][0])?.position_name ?? '1 role'
+                ? poolItems.find((p) => p.id === [...pickedRoles][0])?.name ??
+                  roleItems.find((r) => r.id === [...pickedRoles][0])?.name ??
+                  '1 role'
                 : `${pickedRoles.size} roles`
           }
           open={openMenu === 'role'}
@@ -403,16 +437,15 @@ export function GapView({ session, profile }: GapViewProps) {
           onClear={pickedRoles.size ? () => setPickedRoles(new Set()) : undefined}
         >
           <CheckGroup
+            label="Pools"
+            items={poolItems}
+            selected={pickedRoles}
+            onToggle={toggleRole}
+            onSetMany={setManyRoles}
+          />
+          <CheckGroup
             label="Management roles"
-            items={reqs
-              .filter((r) => r.required_count > 0)
-              .slice()
-              .sort(
-                (a, b) =>
-                  (a.level ?? Infinity) - (b.level ?? Infinity) ||
-                  a.position_name.localeCompare(b.position_name),
-              )
-              .map((r) => ({ id: r.position_id, name: r.position_name }))}
+            items={roleItems.map((r) => ({ id: r.id, name: r.name }))}
             selected={pickedRoles}
             onToggle={toggleRole}
             onSetMany={setManyRoles}
