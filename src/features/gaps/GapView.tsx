@@ -5,7 +5,7 @@
 //  - Single location: required roster vs who's in seat (open) / slated (opening).
 // Admin/executive can edit the required counts. Both modes export to Word (.docx).
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import {
   ArrowDown,
@@ -182,20 +182,29 @@ export function GapView({ session, profile }: GapViewProps) {
   }, [effSingles, fill, pickedRoles, groupMemberPos])
 
   // Group rows for the single-location table (fill comes from the location's
-  // per-position fill map).
+  // per-position fill map). Each pool renders as a header row plus one row per
+  // member position, so members read like ordinary roles.
   const groupRows = useMemo(() => {
     return effGroups
       .filter((g) => pickedRoles.size === 0 || g.roles.some((r) => pickedRoles.has(r.position_id)))
       .map((g) => {
         const filledByPos = new Map<string, number>()
-        const names: string[] = []
         for (const r of g.roles) {
-          const f = fill.get(r.position_id) ?? { count: 0, names: [] }
-          filledByPos.set(r.position_id, f.count)
-          names.push(...f.names)
+          filledByPos.set(r.position_id, (fill.get(r.position_id) ?? { count: 0, names: [] }).count)
         }
         const gg = groupGap(g, filledByPos)
-        return { id: g.id, name: g.name, total_min: g.total_min, current: gg.filledTotal, gap: gg.gap, detail: gg.detail, names }
+        const members = g.roles.map((r) => {
+          const f = fill.get(r.position_id) ?? { count: 0, names: [] }
+          return {
+            position_id: r.position_id,
+            position_name: r.position_name,
+            min_count: r.min_count,
+            current: f.count,
+            names: f.names,
+            gap: Math.max(0, r.min_count - f.count),
+          }
+        })
+        return { id: g.id, name: g.name, total_min: g.total_min, current: gg.filledTotal, gap: gg.gap, detail: gg.detail, members }
       })
   }, [effGroups, fill, pickedRoles])
 
@@ -517,28 +526,57 @@ export function GapView({ session, profile }: GapViewProps) {
                 </tr>
               ))}
               {groupRows.map((g) => (
-                <tr key={g.id} className="border-b border-surface-line/60 last:border-0 bg-surface-muted/20">
-                  <td className="px-4 py-2.5 font-medium">
-                    {g.name}
-                    <span className="ml-1.5 rounded-full bg-info/10 px-1.5 py-0.5 text-[10px] font-medium text-info">
-                      pool
-                    </span>
-                  </td>
-                  <td className="px-4 py-2.5 text-center">{g.total_min}</td>
-                  <td className="px-4 py-2.5 text-center">{g.current}</td>
-                  <td className="px-4 py-2.5 text-center">
-                    {g.gap > 0 ? (
-                      <span className="rounded-full bg-danger/10 px-2 py-0.5 text-xs font-medium text-danger">
-                        short {g.gap}
+                <Fragment key={g.id}>
+                  <tr className="border-b border-surface-line/60 bg-surface-muted/20">
+                    <td className="px-4 py-2.5 font-medium">
+                      {g.name}
+                      <span className="ml-1.5 rounded-full bg-info/10 px-1.5 py-0.5 text-[10px] font-medium text-info">
+                        pool
                       </span>
-                    ) : (
-                      <span className="rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success">
-                        OK
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2.5 text-xs text-charcoal/60">{g.detail}</td>
-                </tr>
+                    </td>
+                    <td className="px-4 py-2.5 text-center">{g.total_min}</td>
+                    <td className="px-4 py-2.5 text-center">{g.current}</td>
+                    <td className="px-4 py-2.5 text-center">
+                      {g.gap > 0 ? (
+                        <span className="rounded-full bg-danger/10 px-2 py-0.5 text-xs font-medium text-danger">
+                          short {g.gap}
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success">
+                          OK
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-charcoal/60">
+                      any mix of the roles below, {g.total_min} total
+                    </td>
+                  </tr>
+                  {g.members.map((m) => (
+                    <tr key={m.position_id} className="border-b border-surface-line/60 last:border-0">
+                      <td className="px-4 py-2.5 pl-9 text-charcoal/80">{m.position_name}</td>
+                      <td className="px-4 py-2.5 text-center">{m.min_count > 0 ? `${m.min_count} min` : '—'}</td>
+                      <td className="px-4 py-2.5 text-center">{m.current}</td>
+                      <td className="px-4 py-2.5 text-center">
+                        {m.min_count > 0 ? (
+                          m.gap > 0 ? (
+                            <span className="rounded-full bg-danger/10 px-2 py-0.5 text-xs font-medium text-danger">
+                              short {m.gap}
+                            </span>
+                          ) : (
+                            <span className="rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success">
+                              OK
+                            </span>
+                          )
+                        ) : (
+                          <span className="text-xs text-charcoal/40">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-charcoal/60">
+                        {m.names.join(', ') || (upcoming ? 'not yet named' : '—')}
+                      </td>
+                    </tr>
+                  ))}
+                </Fragment>
               ))}
             </tbody>
             <tfoot>
