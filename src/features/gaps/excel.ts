@@ -19,6 +19,7 @@ export interface CompanyGapXlsxRow {
   needed_by: string // ISO date, 'ASAP', or '—'
   reason: 'new-site' | 'backfill' | 'understaffed'
   detail: string
+  owner: string // per-seat owners/support, e.g. "Sarah + John by 2026-09-15; Dave"
 }
 
 const REASON_TEXT: Record<CompanyGapXlsxRow['reason'], string> = {
@@ -83,13 +84,14 @@ export async function downloadCompanyGapXlsx(opts: {
     [],
     // "Assign to" is the fill-in column: type who should fill each open role,
     // then re-upload to record them as slated leaders (Gap Analysis → Upload).
-    ['Location', 'Role', 'Gap', 'Priority', 'Needed by', 'Type', 'Detail', 'Assign to'],
+    ['Location', 'Role', 'Gap', 'Priority', 'Needed by', 'Owner', 'Type', 'Detail', 'Assign to'],
     ...opts.rows.map((r) => [
       r.location_name,
       r.position_name,
       r.gap,
       r.priority,
       r.needed_by,
+      r.owner || '—',
       REASON_TEXT[r.reason],
       r.detail || '—',
       '',
@@ -102,6 +104,7 @@ export async function downloadCompanyGapXlsx(opts: {
     { wch: 6 },
     { wch: 9 },
     { wch: 12 },
+    { wch: 28 },
     { wch: 14 },
     { wch: 48 },
     { wch: 28 },

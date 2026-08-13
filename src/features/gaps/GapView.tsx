@@ -21,14 +21,19 @@ import {
 } from 'lucide-react'
 import { ImportPanel } from './ImportPanel'
 import { CurrentRosterPanel } from './CurrentRosterPanel'
+import { SeatOwnersPanel, type SeatCell } from './SeatOwnersPanel'
 import { actorFrom } from '../../lib/activity'
 import { errText } from '../../lib/errText'
+import { fetchPeopleOptions, type PersonOption } from '../bench/api'
 import {
   EMPTY_FILL,
+  assignmentCellKey,
+  cellKeyForGap,
   deleteRequirementGroup,
   fetchBenchForLocation,
   fetchCompanyGaps,
   fetchFillForLocation,
+  fetchGapAssignments,
   fetchGapLocations,
   fetchManagementPositions,
   fetchRequirementGroups,
@@ -42,6 +47,7 @@ import {
   setRoleRequirement,
   type CompanyGap,
   type Fill,
+  type GapAssignment,
   type GapLocation,
   type GapPriority,
   type GapReason,
@@ -117,6 +123,22 @@ export function GapView({ session, profile }: GapViewProps) {
   const [excludeIncoming, setExcludeIncoming] = useState(false)
   // Clicking a location name in the company table opens its roster overlay.
   const [rosterLoc, setRosterLoc] = useState<GapLocation | null>(null)
+  // Per-seat owner/support assignments, keyed per (location, role|pool) cell;
+  // clicking a gap row's Owner cell opens the seat editor.
+  const [assignMap, setAssignMap] = useState<Map<string, GapAssignment[]>>(new Map())
+  const [people, setPeople] = useState<PersonOption[]>([])
+  const [seatCell, setSeatCell] = useState<SeatCell | null>(null)
+
+  const loadAssignments = useCallback(() => {
+    fetchGapAssignments().then(setAssignMap).catch((e: Error) => setError(e.message))
+  }, [])
+  useEffect(() => {
+    loadAssignments()
+  }, [loadAssignments])
+  // The people list only feeds the pickers — editors need it, viewers don't.
+  useEffect(() => {
+    if (canEdit) fetchPeopleOptions().then(setPeople).catch((e: Error) => setError(e.message))
+  }, [canEdit])
 
   const loadReqs = useCallback(() => {
     fetchRoleRequirements().then(setReqs).catch((e: Error) => setError(e.message))
@@ -372,11 +394,22 @@ export function GapView({ session, profile }: GapViewProps) {
     setError(null)
     try {
       if (!single) {
+        const ownerText = (arr: GapAssignment[]) =>
+          arr
+            .filter((a) => a.owner_name || a.support_name)
+            .map(
+              (a) =>
+                `${a.owner_name || '?'}${a.support_name ? ` + ${a.support_name}` : ''}${
+                  a.target_date ? ` by ${a.target_date}` : ''
+                }`,
+            )
+            .join('; ')
         await downloadCompanyGapXlsx({
           rows: sortedCompany.map((r) => ({
             ...r,
             priority: r.priority.charAt(0).toUpperCase() + r.priority.slice(1),
             needed_by: r.needed_by ?? (r.reason === 'understaffed' ? 'ASAP' : '—'),
+            owner: ownerText(assignMap.get(cellKeyForGap(r)) ?? []),
             detail: [
               r.detail,
               r.incoming_names?.length ? `incoming: ${r.incoming_names.join(', ')}` : '',
@@ -605,6 +638,7 @@ export function GapView({ session, profile }: GapViewProps) {
                   <SortHeader label="Gap" k="gap" sortKey={sortKey} dir={sortDir} onSort={toggleSort} center />
                   <SortHeader label="Priority" k="priority" sortKey={sortKey} dir={sortDir} onSort={toggleSort} />
                   <SortHeader label="Needed by" k="needed" sortKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                  <th className="px-4 py-3 font-medium">Owner</th>
                   <SortHeader label="Type" k="type" sortKey={sortKey} dir={sortDir} onSort={toggleSort} />
                   <th className="px-4 py-3 font-medium">Detail</th>
                 </tr>
@@ -612,7 +646,7 @@ export function GapView({ session, profile }: GapViewProps) {
               <tbody>
                 {sortedCompany.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-4 py-6 text-center text-sm text-success">
+                    <td colSpan={8} className="px-4 py-6 text-center text-sm text-success">
                       No gaps — every required seat is filled or slated.
                     </td>
                   </tr>
@@ -661,6 +695,24 @@ export function GapView({ session, profile }: GapViewProps) {
                           </span>
                         )}
                       </td>
+                      <td className="px-4 py-2.5 text-xs">
+                        <OwnerCell
+                          assignments={assignMap.get(cellKeyForGap(g)) ?? []}
+                          canEdit={canEdit}
+                          onOpen={() =>
+                            setSeatCell({
+                              locationId: g.location_id,
+                              locationName: g.location_name,
+                              kind: g.kind,
+                              positionId: g.kind === 'role' ? g.position_id : null,
+                              groupName: g.kind === 'group' ? g.position_name : null,
+                              roleLabel: g.position_name,
+                              gap: g.gap,
+                              neededBy: g.needed_by ? fmtDate(g.needed_by) : null,
+                            })
+                          }
+                        />
+                      </td>
                       <td className="px-4 py-2.5">
                         <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${REASON_CLASS[g.reason]}`}>
                           {REASON_LABEL[g.reason]}
@@ -701,6 +753,7 @@ export function GapView({ session, profile }: GapViewProps) {
                 <th className="px-4 py-3 text-center font-medium">{upcoming ? 'Slated' : 'In seat'}</th>
                 <th className="px-4 py-3 text-center font-medium">Gap</th>
                 <th className="px-4 py-3 font-medium">{upcoming ? 'Slated' : 'People'}</th>
+                <th className="px-4 py-3 font-medium">Owner</th>
               </tr>
             </thead>
             <tbody>
@@ -726,6 +779,28 @@ export function GapView({ session, profile }: GapViewProps) {
                       <span className="font-medium text-success">
                         {' · '}bench: {bench.get(r.position_id)?.join(', ')}
                       </span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5 text-xs">
+                    {r.gap > 0 || (assignMap.get(assignmentCellKey(single, 'role', r.position_id))?.length ?? 0) > 0 ? (
+                      <OwnerCell
+                        assignments={assignMap.get(assignmentCellKey(single, 'role', r.position_id)) ?? []}
+                        canEdit={canEdit}
+                        onOpen={() =>
+                          setSeatCell({
+                            locationId: single,
+                            locationName: selected?.name ?? '',
+                            kind: 'role',
+                            positionId: r.position_id,
+                            groupName: null,
+                            roleLabel: r.position_name,
+                            gap: r.gap,
+                            neededBy: null,
+                          })
+                        }
+                      />
+                    ) : (
+                      <span className="text-charcoal/40">—</span>
                     )}
                   </td>
                 </tr>
@@ -754,6 +829,28 @@ export function GapView({ session, profile }: GapViewProps) {
                     </td>
                     <td className="px-4 py-2.5 text-xs text-charcoal/60">
                       any mix of the roles below, {g.total_min} total
+                    </td>
+                    <td className="px-4 py-2.5 text-xs">
+                      {g.gap > 0 || (assignMap.get(assignmentCellKey(single, 'group', g.name))?.length ?? 0) > 0 ? (
+                        <OwnerCell
+                          assignments={assignMap.get(assignmentCellKey(single, 'group', g.name)) ?? []}
+                          canEdit={canEdit}
+                          onOpen={() =>
+                            setSeatCell({
+                              locationId: single,
+                              locationName: selected?.name ?? '',
+                              kind: 'group',
+                              positionId: null,
+                              groupName: g.name,
+                              roleLabel: g.name,
+                              gap: g.gap,
+                              neededBy: null,
+                            })
+                          }
+                        />
+                      ) : (
+                        <span className="text-charcoal/40">—</span>
+                      )}
                     </td>
                   </tr>
                   {g.members.map((m) => (
@@ -787,6 +884,9 @@ export function GapView({ session, profile }: GapViewProps) {
                           </span>
                         )}
                       </td>
+                      <td className="px-4 py-2.5 text-xs text-charcoal/40">
+                        {/* seat owners live on the pool row above */}
+                      </td>
                     </tr>
                   ))}
                 </Fragment>
@@ -805,6 +905,7 @@ export function GapView({ session, profile }: GapViewProps) {
                   )}
                 </td>
                 <td />
+                <td />
               </tr>
             </tfoot>
           </table>
@@ -812,7 +913,70 @@ export function GapView({ session, profile }: GapViewProps) {
       )}
 
       {rosterLoc && <CurrentRosterPanel location={rosterLoc} onClose={() => setRosterLoc(null)} />}
+      {seatCell && (
+        <SeatOwnersPanel
+          actor={actor}
+          canEdit={canEdit}
+          cell={seatCell}
+          assignments={
+            assignMap.get(
+              assignmentCellKey(
+                seatCell.locationId,
+                seatCell.kind,
+                seatCell.kind === 'role' ? seatCell.positionId ?? '' : seatCell.groupName ?? '',
+              ),
+            ) ?? []
+          }
+          people={people}
+          onClose={() => setSeatCell(null)}
+          onSaved={loadAssignments}
+        />
+      )}
     </div>
+  )
+}
+
+// The Owner column: per-seat owners/support for the cell, e.g.
+// "Sarah Lee +John M. · 15 Sep, Dave R.". Editors see "Assign" when empty;
+// clicking opens the seat editor (read-only for non-editors with rows).
+function OwnerCell({
+  assignments,
+  canEdit,
+  onOpen,
+}: {
+  assignments: GapAssignment[]
+  canEdit: boolean
+  onOpen: () => void
+}) {
+  const parts = assignments.filter((a) => a.owner_name || a.support_name || a.target_date)
+  const body =
+    parts.length === 0 ? (
+      canEdit ? (
+        <span className="font-medium text-cg-orange">Assign</span>
+      ) : (
+        <span className="text-charcoal/40">—</span>
+      )
+    ) : (
+      <span>
+        {parts.map((a, i) => (
+          <span key={a.id}>
+            {i > 0 && ', '}
+            <span className="font-medium">{a.owner_name || '?'}</span>
+            {a.support_name && <span className="text-charcoal/50"> +{a.support_name}</span>}
+            {a.target_date && <span className="text-charcoal/50"> · {fmtDate(a.target_date)}</span>}
+          </span>
+        ))}
+      </span>
+    )
+  if (!canEdit && parts.length === 0) return body
+  return (
+    <button
+      onClick={onOpen}
+      title="Seat owners — who is responsible for filling each open seat"
+      className="text-left hover:underline"
+    >
+      {body}
+    </button>
   )
 }
 

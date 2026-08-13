@@ -9,6 +9,7 @@ import { VisitView } from './features/visit/VisitView'
 import { OrgChartView } from './features/org/OrgChartView'
 import { UpcomingView } from './features/upcoming/UpcomingView'
 import { GapView } from './features/gaps/GapView'
+import { MyTasksView } from './features/tasks/MyTasksView'
 import { BenchView } from './features/bench/BenchView'
 import { CoverageView } from './features/coverage/CoverageView'
 import { can, toPermissionUser } from './permissions'
@@ -21,12 +22,22 @@ const DataSourcesView = lazy(() =>
   })),
 )
 
+// Deep link from CGOPS My Day (Menu Center's pattern): /?view=my-tasks opens
+// My Tasks. The QUERY carries it — the hash is reserved for the SSO handoff.
+// Consumed once, then stripped so refreshes stay on normal navigation.
+function initialView(): View {
+  const params = new URLSearchParams(window.location.search)
+  if (params.get('view') !== 'my-tasks') return 'directory'
+  window.history.replaceState(null, '', window.location.pathname + window.location.hash)
+  return 'my_tasks'
+}
+
 // Top-level view state lives here (house convention — no router library;
 // revisit at Phase 2 per ARCHITECTURE_REVIEW.md §2.3 when the cheat sheet
 // wants shareable deep links).
 export default function App() {
   const { session, profile, profileError, loading } = useSession()
-  const [view, setView] = useState<View>('directory')
+  const [view, setView] = useState<View>(initialView)
 
   if (loading) {
     return (
@@ -76,6 +87,8 @@ export default function App() {
         <UpcomingView session={session} profile={profile} />
       ) : effectiveView === 'gaps' ? (
         <GapView session={session} profile={profile} />
+      ) : effectiveView === 'my_tasks' ? (
+        <MyTasksView session={session} profile={profile} />
       ) : effectiveView === 'bench' ? (
         <BenchView session={session} profile={profile} />
       ) : effectiveView === 'coverage' ? (

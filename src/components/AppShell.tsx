@@ -12,6 +12,7 @@ import {
   ClipboardList,
   Database,
   HelpCircle,
+  ListTodo,
   Map,
   MapPin,
   Network,
@@ -35,6 +36,7 @@ export type View =
   | 'org_chart'
   | 'upcoming'
   | 'gaps'
+  | 'my_tasks'
   | 'bench'
   | 'data_sources'
   | 'coverage'
@@ -46,6 +48,7 @@ const NAV: { view: View; label: string; resource: Resource; icon: LucideIcon }[]
   { view: 'org_chart', label: 'Org Chart', resource: 'org_chart', icon: Network },
   { view: 'upcoming', label: 'Upcoming', resource: 'org_chart', icon: Store },
   { view: 'gaps', label: 'Gap Analysis', resource: 'gap_analysis', icon: ClipboardList },
+  { view: 'my_tasks', label: 'My Tasks', resource: 'my_tasks', icon: ListTodo },
   { view: 'bench', label: 'Bench & Risk', resource: 'bench', icon: BarChart3 },
   { view: 'data_sources', label: 'Data Sources', resource: 'data_sources', icon: Database },
   { view: 'coverage', label: 'Covered locations', resource: 'user_scopes', icon: Map },

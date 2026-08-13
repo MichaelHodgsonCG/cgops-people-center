@@ -917,6 +917,131 @@ export async function fetchLocationRoster(
   return map
 }
 
+// --- Gap seat assignments: per-seat owner/support + target date --------------
+// Menu Center's launch-task owner model applied to staffing gaps: each open
+// SEAT at a (location, role|pool) cell can carry an OWNER (who is responsible
+// for filling it), a SUPPORT person, a target date, and a note. Owners are a
+// linked person plus a name snapshot (free text stays possible for outside
+// parties). Gaps stay derived — these rows only annotate them; when a cell's
+// gap closes, its assignments simply stop matching a live gap.
+
+export interface GapAssignment {
+  id: string
+  location_id: string
+  position_id: string | null // role gaps: the position id
+  group_name: string | null // pool gaps: the pool NAME (ids get recreated; names survive)
+  seat_index: number
+  owner_person_id: string | null
+  owner_name: string
+  support_person_id: string | null
+  support_name: string
+  target_date: string | null
+  note: string
+}
+
+/** One cell = one (location, role|pool). Role cells key on the position id,
+ * pool cells on the pool's lower-cased name — matching the DB's unique
+ * indexes, so a recreated pool keeps its assignments. */
+export function assignmentCellKey(
+  locationId: string,
+  kind: 'role' | 'group',
+  positionIdOrGroupName: string,
+): string {
+  return `${locationId}|${kind}|${positionIdOrGroupName.toLowerCase()}`
+}
+
+export function cellKeyForGap(g: CompanyGap): string {
+  return assignmentCellKey(g.location_id, g.kind, g.kind === 'role' ? g.position_id : g.position_name)
+}
+
+/** All assignments, grouped per cell and ordered by seat. RLS scopes what
+ * comes back: gap viewers see everything, everyone else only their own rows
+ * (owner or support) — which is exactly what My Tasks needs. */
+export async function fetchGapAssignments(): Promise<Map<string, GapAssignment[]>> {
+  const { data, error } = await supabase
+    .from('people_center_gap_assignments')
+    .select(
+      'id, location_id, position_id, group_name, seat_index, owner_person_id, owner_name, support_person_id, support_name, target_date, note',
+    )
+  if (error) throw error
+  const map = new Map<string, GapAssignment[]>()
+  for (const a of ((data as unknown as GapAssignment[]) ?? [])) {
+    const k = a.position_id
+      ? assignmentCellKey(a.location_id, 'role', a.position_id)
+      : assignmentCellKey(a.location_id, 'group', a.group_name ?? '')
+    const arr = map.get(k) ?? []
+    arr.push(a)
+    map.set(k, arr)
+  }
+  for (const arr of map.values()) arr.sort((a, b) => a.seat_index - b.seat_index)
+  return map
+}
+
+export interface GapAssignmentInput {
+  id?: string // set = update this row; unset = create
+  locationId: string
+  positionId: string | null
+  groupName: string | null
+  seatIndex: number
+  ownerPersonId: string | null
+  ownerName: string
+  supportPersonId: string | null
+  supportName: string
+  targetDate: string | null
+  note: string
+}
+
+export async function saveGapAssignment(
+  actor: Actor,
+  input: GapAssignmentInput,
+  label: string, // "Sous Chef — Beertown Peterborough (seat 2)" for the audit trail
+): Promise<void> {
+  const row = {
+    location_id: input.locationId,
+    position_id: input.positionId,
+    group_name: input.groupName,
+    seat_index: input.seatIndex,
+    owner_person_id: input.ownerPersonId,
+    owner_name: input.ownerName,
+    support_person_id: input.supportPersonId,
+    support_name: input.supportName,
+    target_date: input.targetDate,
+    note: input.note,
+    updated_at: new Date().toISOString(),
+    updated_by: actor.personId,
+    updated_by_name: actor.name,
+  }
+  let id = input.id ?? null
+  if (id) {
+    const { error } = await supabase.from('people_center_gap_assignments').update(row).eq('id', id)
+    if (error) throw error
+  } else {
+    const { data, error } = await supabase
+      .from('people_center_gap_assignments')
+      .insert(row)
+      .select('id')
+    if (error) throw error
+    id = (data?.[0] as { id: string } | undefined)?.id ?? null
+  }
+  const who = [input.ownerName && `owner ${input.ownerName}`, input.supportName && `support ${input.supportName}`]
+    .filter(Boolean)
+    .join(', ')
+  await recordAudit(
+    actor,
+    input.id ? 'update' : 'create',
+    'gap_assignment',
+    id,
+    label,
+    `${label}: ${who || 'no owner'}${input.targetDate ? `, target ${input.targetDate}` : ''}`,
+  )
+}
+
+export async function deleteGapAssignment(actor: Actor, id: string, label: string): Promise<void> {
+  const { error } = await supabase.from('people_center_gap_assignments').delete().eq('id', id)
+  if (error) throw error
+  await recordAudit(actor, 'delete', 'gap_assignment', id, label, `Cleared seat assignment: ${label}`)
+}
+
 // --- Excel round-trip: apply filled-in assignments as slated leaders ---------
 
 export interface SeatRef {

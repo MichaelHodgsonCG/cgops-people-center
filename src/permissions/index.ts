@@ -32,6 +32,7 @@ export type Resource =
   | 'relationship_notes' // the cheat sheet's relationship half (audited read)
   | 'restricted_notes' // restricted-visibility notes (audited read)
   | 'user_scopes' // Covered-locations picker: manage bespoke coverage grants (HQ)
+  | 'my_tasks' // gap seats assigned to me (owner/support) — every signed-in role
 
 export interface PermissionUser {
   role: AppRole
@@ -79,6 +80,11 @@ export function can(
       // Covered-locations picker — HQ altitude only (mirrors the widened
       // people_center_user_scopes RLS: admin + executive manage grants).
       return user.role === 'executive'
+    case 'my_tasks':
+      // Every signed-in role: the RLS on people_center_gap_assignments already
+      // scopes non-HQ roles to their OWN rows (owner/support), so the view is
+      // safe for anyone — a Chef or GM sees only what's assigned to them.
+      return action === 'view'
     case 'bench':
       // View: executive altitude + Regional Ops Leaders. ROLs read the whole
       // company's bench/gap picture (succession moves cross regions; ROLs audit
