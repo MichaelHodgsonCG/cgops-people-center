@@ -35,9 +35,11 @@ import {
   fetchFillForLocation,
   fetchGapAssignments,
   fetchGapLocations,
+  fetchHiringLeadTimes,
   fetchManagementPositions,
   fetchRequirementGroups,
   fetchRoleRequirements,
+  setHiringLeadTime,
   groupGap,
   minCover,
   resolveGroupRequirements,
@@ -1310,6 +1312,104 @@ function RequirementsEditor({
       </button>
 
       <GroupEditor key={scope ?? 'global'} groups={effGroups} mgmt={mgmt} actor={actor} scope={scope} onChanged={onSaved} />
+
+      <LeadTimesEditor mgmt={mgmt} actor={actor} onChanged={onSaved} />
+    </div>
+  )
+}
+
+// Hiring lead times — how many days BEFORE OPENING each role must be hired
+// (GM ~90, Chef ~60, …). Company-wide (no per-location variant); 0 = none,
+// the role keeps the site's handover-date deadline. Drives the role-aware
+// "Needed by" in the gap tables and the My Tasks due dates.
+function LeadTimesEditor({
+  mgmt,
+  actor,
+  onChanged,
+}: {
+  mgmt: MgmtPosition[]
+  actor: ReturnType<typeof actorFrom>
+  onChanged: () => void
+}) {
+  const [leads, setLeads] = useState<Map<string, number>>(new Map())
+  const [edits, setEdits] = useState<Map<string, number>>(new Map())
+  const [loaded, setLoaded] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  useEffect(() => {
+    fetchHiringLeadTimes()
+      .then((m) => {
+        setLeads(m)
+        setLoaded(true)
+      })
+      .catch((e: Error) => setErr(e.message))
+  }, [])
+
+  const value = (id: string) => edits.get(id) ?? leads.get(id) ?? 0
+
+  async function save() {
+    setSaving(true)
+    setErr(null)
+    try {
+      for (const [posId, days] of edits) {
+        if (days === (leads.get(posId) ?? 0)) continue
+        const name = mgmt.find((m) => m.id === posId)?.name ?? 'role'
+        await setHiringLeadTime(actor, posId, name, days)
+      }
+      const fresh = await fetchHiringLeadTimes()
+      setLeads(fresh)
+      setEdits(new Map())
+      onChanged()
+    } catch (e) {
+      setErr(errText(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="mt-4 border-t border-cg-orange/30 pt-3">
+      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-charcoal/50">
+        Hiring lead times — days before opening each role must be hired (company-wide)
+      </p>
+      <p className="mb-2 text-[11px] text-charcoal/55">
+        Sets the role-aware “Needed by” date: e.g. GM = 90 means a new site’s GM seat is due 90
+        days before its opening date. 0 = no lead time — the site’s handover date applies. A
+        hand-set target date on a seat always wins.
+      </p>
+      {!loaded && !err ? (
+        <p className="text-xs text-charcoal/50">Loading…</p>
+      ) : (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {mgmt.map((m) => (
+            <div key={m.id} className="flex items-center justify-between gap-2 text-sm">
+              <span className="text-charcoal/70">{m.name}</span>
+              <span className="flex items-center gap-1.5 text-[11px] text-charcoal/50">
+                <input
+                  type="number"
+                  min={0}
+                  value={value(m.id)}
+                  onChange={(e) => {
+                    const n = Math.max(0, parseInt(e.target.value || '0', 10))
+                    setEdits((prev) => new Map(prev).set(m.id, n))
+                  }}
+                  className="w-16 rounded-md border border-surface-line bg-surface px-2 py-1 text-center text-sm"
+                />
+                days
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {err && <p className="mt-2 text-xs text-danger">{err}</p>}
+      <button
+        onClick={() => void save()}
+        disabled={saving || edits.size === 0}
+        className="mt-3 rounded-md bg-cg-orange px-3 py-1.5 text-sm font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
+      >
+        {saving ? 'Saving…' : 'Save lead times'}
+      </button>
     </div>
   )
 }

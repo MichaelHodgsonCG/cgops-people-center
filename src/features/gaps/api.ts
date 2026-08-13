@@ -332,6 +332,62 @@ export function groupGap(
   }
 }
 
+// --- Hiring lead times: days before opening each role must be hired ---------
+
+/** position_id → days before opening. No entry = no lead time (the role keys
+ * off the site's handover date like before). */
+export async function fetchHiringLeadTimes(): Promise<Map<string, number>> {
+  const { data, error } = await supabase
+    .from('people_center_hiring_lead_times')
+    .select('position_id, lead_days')
+  if (error) throw error
+  return new Map(
+    (((data as unknown) as { position_id: string; lead_days: number }[]) ?? []).map((r) => [
+      r.position_id,
+      r.lead_days,
+    ]),
+  )
+}
+
+/** days > 0 sets the role's lead time; days <= 0 clears it (back to the
+ * site-level staffing deadline). */
+export async function setHiringLeadTime(
+  actor: Actor,
+  positionId: string,
+  positionName: string,
+  days: number,
+): Promise<void> {
+  if (days > 0) {
+    const { error } = await supabase.from('people_center_hiring_lead_times').upsert(
+      {
+        position_id: positionId,
+        lead_days: days,
+        updated_at: new Date().toISOString(),
+        updated_by: actor.personId,
+        updated_by_name: actor.name,
+      },
+      { onConflict: 'position_id' },
+    )
+    if (error) throw error
+  } else {
+    const { error } = await supabase
+      .from('people_center_hiring_lead_times')
+      .delete()
+      .eq('position_id', positionId)
+    if (error) throw error
+  }
+  await recordAudit(
+    actor,
+    'update',
+    'hiring_lead_time',
+    positionId,
+    positionName,
+    days > 0
+      ? `${positionName}: hire ${days} days before opening`
+      : `${positionName}: lead time cleared (site deadline applies)`,
+  )
+}
+
 export interface GapLocation {
   id: string
   name: string
@@ -388,10 +444,11 @@ export interface CompanyGap {
  * includeIncoming: whether named hires who haven't started yet count as fill.
  * Either way their names are surfaced on the rows via incoming_names. */
 export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyGap[]> {
-  const [reqs, groups, locs, siteRes, assignRes, slotRes] = await Promise.all([
+  const [reqs, groups, locs, leadTimes, siteRes, assignRes, slotRes] = await Promise.all([
     fetchRoleRequirements(),
     fetchRequirementGroups(),
     fetchGapLocations(),
+    fetchHiringLeadTimes(),
     // Staffing deadlines: Restaurant Center's opening_sites (handover date,
     // falling back to opening date), matched to locations by name — the same
     // link the Upcoming page uses (opening_sites carries no location id).
@@ -420,13 +477,34 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
 
   const key = (locId: string, posId: string) => `${locId}|${posId}`
 
-  // location name (normalized) -> staffing deadline (ISO date)
+  // location name (normalized) -> the site's dates (Restaurant Center)
   const norm = (s: string) => s.trim().toLowerCase()
-  const deadlineByName = new Map<string, string>()
   type Site = { name: string | null; handover_date: string | null; opening_date: string | null }
+  const siteByName = new Map<string, { handover: string | null; opening: string | null }>()
   for (const s of (siteRes.data as unknown as Site[]) ?? []) {
-    const d = s.handover_date ?? s.opening_date
-    if (s.name && d) deadlineByName.set(norm(s.name), d)
+    if (s.name) siteByName.set(norm(s.name), { handover: s.handover_date, opening: s.opening_date })
+  }
+
+  const minusDays = (iso: string, days: number): string => {
+    const d = new Date(`${iso}T00:00:00Z`)
+    d.setUTCDate(d.getUTCDate() - days)
+    return d.toISOString().slice(0, 10)
+  }
+  // Site-level staffing deadline: handover date, falling back to opening.
+  const siteDeadline = (locName: string): string | null => {
+    const s = siteByName.get(norm(locName))
+    return s ? s.handover ?? s.opening : null
+  }
+  // Role-aware deadline: a configured hiring lead time counts back from the
+  // OPENING date (falling back to handover) — "GM hired 90 days out". Roles
+  // without a lead time keep the site-level deadline.
+  const roleDeadline = (locName: string, positionId: string): string | null => {
+    const s = siteByName.get(norm(locName))
+    if (!s) return null
+    const lead = leadTimes.get(positionId)
+    const base = s.opening ?? s.handover
+    if (lead != null && base) return minusDays(base, lead)
+    return s.handover ?? s.opening
   }
 
   // Priority is computed, not stored, so it never goes stale:
@@ -483,7 +561,9 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
     candidates: { rank: number; people: { full_name: string } | null }[] | null
   }
   const slatedByCell = new Map<string, CellPerson[]>()
-  const moverDest = new Map<string, string>()
+  // person -> where they're slated to move (and as what role, so the backfill
+  // deadline can respect the destination role's hiring lead time)
+  const moverDest = new Map<string, { name: string; positionId: string }>()
   // Ranked successors per seat — a PLAN for the seat, never counted as fill.
   // RLS keeps candidates executive/admin-only; other viewers just get none.
   const benchByCell = new Map<string, { rank: number; name: string }[]>()
@@ -501,7 +581,7 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
     const arr = slatedByCell.get(k) ?? []
     arr.push({ id: s.incumbent_person_id, name: s.incumbent.full_name, incoming: s.incumbent.status === 'incoming' })
     slatedByCell.set(k, arr)
-    moverDest.set(s.incumbent_person_id, s.location.name)
+    moverDest.set(s.incumbent_person_id, { name: s.location.name, positionId: s.position_id })
   }
   const benchFor = (locId: string, posIds: string[]): string[] =>
     posIds
@@ -548,7 +628,7 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
       const hasPlan = incomingNames.length > 0 || benchNames.length > 0
       if (loc.status === 'opening') {
         const named = people.filter((p) => !p.incoming).map((p) => p.name)
-        const neededBy = deadlineByName.get(norm(loc.name)) ?? null
+        const neededBy = roleDeadline(loc.name, r.position_id)
         out.push({
           location_id: loc.id,
           location_name: loc.name,
@@ -570,11 +650,15 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
       } else {
         const k = key(loc.id, r.position_id)
         const movers = (curByCell.get(k) ?? []).filter((p) => moverDest.has(p.id))
-        // Backfill deadline = the earliest destination's staffing deadline —
-        // the seat opens the day its holder leaves. Understaffed = now (null).
+        // Backfill deadline = the earliest destination deadline — the seat
+        // opens the day its holder leaves, which is when the DESTINATION role
+        // needs them (its hiring lead time applies). Understaffed = now (null).
         const neededBy =
           movers
-            .map((m) => deadlineByName.get(norm(moverDest.get(m.id) ?? '')))
+            .map((m) => {
+              const dest = moverDest.get(m.id)
+              return dest ? roleDeadline(dest.name, dest.positionId) : null
+            })
             .filter((d): d is string => Boolean(d))
             .sort()[0] ?? null
         out.push({
@@ -589,7 +673,7 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
           projected,
           gap,
           reason: movers.length > 0 ? 'backfill' : 'understaffed',
-          detail: movers.map((m) => `${m.name} → ${moverDest.get(m.id)}`).join(', '),
+          detail: movers.map((m) => `${m.name} → ${moverDest.get(m.id)?.name}`).join(', '),
           incoming_names: incomingNames,
           bench_names: benchNames,
           needed_by: neededBy,
@@ -611,7 +695,9 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
       if (gap > 0) {
         const benchNames = benchFor(loc.id, g.roles.map((r) => r.position_id))
         const hasPlan = incomingNames.length > 0 || benchNames.length > 0
-        const neededBy = loc.status === 'opening' ? deadlineByName.get(norm(loc.name)) ?? null : null
+        // Pools stay on the site-level deadline — a pool spans several roles,
+        // so no single role's lead time cleanly applies.
+        const neededBy = loc.status === 'opening' ? siteDeadline(loc.name) : null
         const level = Math.min(...g.roles.map((r) => r.level ?? Infinity))
         out.push({
           location_id: loc.id,
