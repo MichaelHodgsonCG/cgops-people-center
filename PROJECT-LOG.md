@@ -1,5 +1,12 @@
 # Project Log
 
+## [2026-08-13] Session log + bus filing protocol adopted (v2, CG)
+**Shipped:** Adopted the CG session-log + filing protocol (v2). Persisted it verbatim to a new CLAUDE.md at the repo root (including the bus ref: Supabase project qzzhifdwoixqjgugbevq / cgops-platform, table cc_project_artifacts) so every future session inherits it without a paste — persistence confirmed. Verified the bus is reachable and filed this entry to it. No application code changed.
+**Roadmap:** Session log + bus filing protocol -> complete.
+**Decisions:** Matched the bus conventions already used by sibling CG projects (Menu Center, CGOPS Platform): metadata.project="People Center", metadata.filed_by="People Center (Claude Code)", title mirrors the local log entry. Kept PROJECT-LOG.md's existing house format (## [date] + bold labels) rather than the protocol's plain-text shape — same fields, established style.
+**Blockers:** none.
+**Next:** Resume feature work; file a log entry to the bus at the end of every session per CLAUDE.md.
+
 ## [2026-07-24] Gap analysis: multi-location picker + role filter
 **Shipped:** Two filters on the Gap Analysis view. (1) Multi-location picker — the single View dropdown became a checkbox popover: no selection = company-wide, one = the detailed single-location table (unchanged), two+ = the company report filtered to that subset. Because backfill/movers are still computed company-wide in fetchCompanyGaps, a subset view stays correct — only what's shown is filtered. (2) Role filter — a second popover to show only chosen roles (e.g. "Sous Chef" → how many needed across sites), applied to both the company table and the single-location table; summary chips + Excel export follow the active filters. Added location_id + position_id to CompanyGap for id-based filtering (was name-only). New reusable FilterMenu + CheckGroup components. Build passes.
 **Roadmap:** Gap Analysis now slices by any set of locations and/or roles. Common ask ("how many Sous Chefs do we need") = pick the Sous role, leave locations on All → per-site rows + total.
