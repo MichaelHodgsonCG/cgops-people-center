@@ -18,6 +18,10 @@ import {
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { PersonPanel } from '../people/PersonPanel'
+import { fetchManagerCandidates, setManager, type ManagerCandidate } from '../people/api'
+import { actorFrom } from '../../lib/activity'
+import { errText } from '../../lib/errText'
+import { can, toPermissionUser } from '../../permissions'
 import type { UserProfile } from '../../types'
 import './orgChart.css'
 
@@ -134,6 +138,13 @@ export function OrgChartView({ session, profile }: OrgChartViewProps) {
   // Per-node user override (true = collapsed); absent = the depth default.
   const [overrides, setOverrides] = useState<Map<string, boolean>>(new Map())
   const [allExpanded, setAllExpanded] = useState(false)
+  // Inline manager assignment on the "No reporting line" bucket (executive/
+  // admin — mirrors the person panel's reporting-line editor).
+  const canEditPeople = can(profile ? toPermissionUser(profile) : null, 'update', 'person')
+  const actor = actorFrom(profile, session)
+  const [candidates, setCandidates] = useState<ManagerCandidate[] | null>(null)
+  const [assignBusyId, setAssignBusyId] = useState<string | null>(null)
+  const [assignErrors, setAssignErrors] = useState<Map<string, string>>(new Map())
 
   const load = useCallback(() => {
     supabase
@@ -161,6 +172,31 @@ export function OrgChartView({ session, profile }: OrgChartViewProps) {
   const { roots, unassigned } = useMemo(() => buildForest(people), [people])
 
   const peopleById = useMemo(() => new Map(people.map((p) => [p.id, p])), [people])
+
+  // Load the manager-candidate options once there's something to assign.
+  useEffect(() => {
+    if (!canEditPeople || unassigned.length === 0 || candidates !== null) return
+    fetchManagerCandidates().then(setCandidates).catch((e: Error) => setError(e.message))
+  }, [canEditPeople, unassigned.length, candidates])
+
+  async function assignManager(person: OrgPerson, managerId: string) {
+    const manager = candidates?.find((c) => c.id === managerId)
+    if (!manager) return
+    setAssignBusyId(person.id)
+    setAssignErrors((prev) => {
+      const next = new Map(prev)
+      next.delete(person.id)
+      return next
+    })
+    try {
+      await setManager(actor, person.id, person.full_name, manager.id, manager.full_name)
+      load() // the person leaves the bucket and joins their manager's team
+    } catch (e) {
+      setAssignErrors((prev) => new Map(prev).set(person.id, errText(e)))
+    } finally {
+      setAssignBusyId(null)
+    }
+  }
 
   // The focused subtree, if any. Depth defaults become RELATIVE to the focus
   // person (they render at depth 0), so focusing a region opens its teams.
@@ -344,19 +380,56 @@ export function OrgChartView({ session, profile }: OrgChartViewProps) {
           <h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-warning">
             <AlertTriangle className="h-3.5 w-3.5" /> No reporting line ({unassigned.length})
           </h3>
-          <ul className="space-y-1">
+          {canEditPeople && (
+            <p className="mb-2 text-[11px] text-charcoal/55">
+              Pick who each person reports to and they move straight into the chart. Click a name
+              for the full profile editor.
+            </p>
+          )}
+          <ul className="space-y-1.5">
             {unassigned.map((p) => (
               <li key={p.id}>
-                <button
-                  onClick={() => setSelectedId(p.id)}
-                  className="text-sm text-charcoal/80 underline-offset-2 hover:text-cg-orange hover:underline"
-                >
-                  {p.full_name}
-                </button>
-                <span className="ml-2 text-xs text-charcoal/50">
-                  {primaryOf(p)?.positions?.name ?? 'no position'}
-                  {primaryOf(p)?.locations?.name ? ` — ${primaryOf(p)!.locations!.name}` : ''}
-                </span>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <button
+                    onClick={() => setSelectedId(p.id)}
+                    className="text-sm text-charcoal/80 underline-offset-2 hover:text-cg-orange hover:underline"
+                  >
+                    {p.full_name}
+                  </button>
+                  <span className="text-xs text-charcoal/50">
+                    {primaryOf(p)?.positions?.name ?? 'no position'}
+                    {primaryOf(p)?.locations?.name ? ` — ${primaryOf(p)!.locations!.name}` : ''}
+                  </span>
+                  {canEditPeople && (
+                    <select
+                      value=""
+                      disabled={assignBusyId !== null || candidates === null}
+                      onChange={(e) => {
+                        if (e.target.value) void assignManager(p, e.target.value)
+                      }}
+                      aria-label={`Assign a manager for ${p.full_name}`}
+                      className="ml-auto max-w-72 rounded-md border border-surface-line bg-surface px-2 py-1 text-xs disabled:opacity-60"
+                    >
+                      <option value="">
+                        {assignBusyId === p.id
+                          ? 'Saving…'
+                          : candidates === null
+                            ? 'Loading people…'
+                            : 'Reports to…'}
+                      </option>
+                      {(candidates ?? [])
+                        .filter((c) => c.id !== p.id)
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.label}
+                          </option>
+                        ))}
+                    </select>
+                  )}
+                </div>
+                {assignErrors.get(p.id) && (
+                  <p className="mt-0.5 text-xs text-danger">{assignErrors.get(p.id)}</p>
+                )}
               </li>
             ))}
           </ul>
