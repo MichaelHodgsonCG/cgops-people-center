@@ -1,5 +1,12 @@
 # Project Log
 
+## [2026-08-25] Org chart: inline manager assignment for unassigned people
+**Shipped:** The "No reporting line" bucket on the Org Chart is now editable in place (Michael's ask, from the live page showing 7 unassigned at BT London White Oaks). Each row gets a "Reports to…" dropdown (same candidate list as the person panel's reporting-line editor, labels with position · location, self excluded); picking a manager saves via the existing setManager (audited + timeline event, loud failure if RLS blocks) and reloads, so the person jumps straight into their manager's team. Visible only to roles that can edit people (executive/admin); everyone else keeps the read-only list. Names still open the full person panel. Cycle-safe by construction — bucket members have no manager and no reports. Build passes; merged to main.
+**Roadmap:** Org chart hygiene -> unassigned people fixable without leaving the page.
+**Decisions:** Save-on-select (no confirm step) — the action is small, visible, audited, and instantly correctable by reassigning; matches the bulk-fix use case of clearing 7 supervisors quickly.
+**Blockers:** none.
+**Next:** none queued — Michael assigns the 7 White Oaks supervisors (likely to GM Tricia DeSando).
+
 ## [2026-08-19] Admin-only Activity Log page
 **Shipped:** New "Activity Log" nav view (admins only, per Michael's ask) over people_center_audit_log — the append-only compliance record every feature already writes via recordAudit, including audited reads of restricted/relationship notes. Newest-first table (when / who / action chip / entity + label / detail) with filters (action dropdown, who, entity type, free-text search over summary+label, debounced) and 50-row load-more paging. No schema or RLS changes needed: the table's SELECT policy has been admin-only since Phase 0, so the page is defense-in-depth gated three ways (nav hidden via admin_area resource, route guard in App.tsx, RLS returns zero rows to non-admins regardless). Build passes; merged to main (auto-deploys).
 **Roadmap:** Admin tooling -> Activity Log v1 complete.
