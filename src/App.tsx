@@ -4,6 +4,7 @@ import { RedirectToCgops } from './features/auth/RedirectToCgops'
 import { AppShell, type View } from './components/AppShell'
 import { SessionTimeoutManager } from './components/SessionTimeoutManager'
 import { UsersView } from './features/admin/UsersView'
+import { ActivityLogView } from './features/activity/ActivityLogView'
 import { DirectoryView } from './features/directory/DirectoryView'
 import { VisitView } from './features/visit/VisitView'
 import { OrgChartView } from './features/org/OrgChartView'
@@ -57,7 +58,8 @@ export default function App() {
     (view === 'bench' && !can(user, 'view', 'bench')) ||
     (view === 'gaps' && !can(user, 'view', 'gap_analysis')) ||
     (view === 'coverage' && !can(user, 'view', 'user_scopes')) ||
-    (view === 'users' && !can(user, 'view', 'admin_area'))
+    (view === 'users' && !can(user, 'view', 'admin_area')) ||
+    (view === 'activity' && !can(user, 'view', 'admin_area'))
   const effectiveView: View = guarded ? 'directory' : view
 
   return (
@@ -79,6 +81,8 @@ export default function App() {
         </Suspense>
       ) : effectiveView === 'users' ? (
         <UsersView session={session} profile={profile} />
+      ) : effectiveView === 'activity' ? (
+        <ActivityLogView session={session} profile={profile} />
       ) : effectiveView === 'visit' ? (
         <VisitView session={session} profile={profile} />
       ) : effectiveView === 'org_chart' ? (

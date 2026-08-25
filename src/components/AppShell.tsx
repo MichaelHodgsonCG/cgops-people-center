@@ -17,6 +17,7 @@ import {
   MapPin,
   Network,
   LogOut,
+  ScrollText,
   ShieldAlert,
   Store,
   UserCog,
@@ -41,6 +42,7 @@ export type View =
   | 'data_sources'
   | 'coverage'
   | 'users'
+  | 'activity'
 
 const NAV: { view: View; label: string; resource: Resource; icon: LucideIcon }[] = [
   { view: 'directory', label: 'Directory', resource: 'directory', icon: Users },
@@ -53,6 +55,7 @@ const NAV: { view: View; label: string; resource: Resource; icon: LucideIcon }[]
   { view: 'data_sources', label: 'Data Sources', resource: 'data_sources', icon: Database },
   { view: 'coverage', label: 'Covered locations', resource: 'user_scopes', icon: Map },
   { view: 'users', label: 'Users', resource: 'admin_area', icon: UserCog },
+  { view: 'activity', label: 'Activity Log', resource: 'admin_area', icon: ScrollText },
 ]
 
 const NAV_PREF_KEY = 'pc.nav.expanded'
