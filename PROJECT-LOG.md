@@ -1,5 +1,12 @@
 # Project Log
 
+## [2026-08-19] Admin-only Activity Log page
+**Shipped:** New "Activity Log" nav view (admins only, per Michael's ask) over people_center_audit_log — the append-only compliance record every feature already writes via recordAudit, including audited reads of restricted/relationship notes. Newest-first table (when / who / action chip / entity + label / detail) with filters (action dropdown, who, entity type, free-text search over summary+label, debounced) and 50-row load-more paging. No schema or RLS changes needed: the table's SELECT policy has been admin-only since Phase 0, so the page is defense-in-depth gated three ways (nav hidden via admin_area resource, route guard in App.tsx, RLS returns zero rows to non-admins regardless). Build passes; merged to main (auto-deploys).
+**Roadmap:** Admin tooling -> Activity Log v1 complete.
+**Decisions:** Viewer over the EXISTING audit_log rather than any new tracking — "track what users do" is exactly what ADR 0003's compliance record captures; no new collection added. Domain events (people_center_events) left out of v1 — audit_log is the user-action record; events are pointers for the timeline.
+**Blockers:** none.
+**Next:** If Michael wants more: per-person activity drill-down from the directory, date-range filter, or CSV export.
+
 ## [2026-08-19] Bulk email import from CG MGMT contact list (Aug 18)
 **Shipped:** Imported work emails from Michael's "CG MGMT Email Contact List (Aug 18th)" spreadsheet into people_center_people. 156 profiles gained an email (was 2 with email, now 158 of 285): 140 exact name matches (letters-only normalization, one-match-only guard, departed people excluded), 7 automatic name-variant matches (e.g. Caitlin/Caitlinn O'Leary, Maria Paula Rueda, reversed "Probudhya Roy"), 9 hand-verified variants (accents, nicknames like Mirka→Miroslava and Izzy→Isobel, hyphenated/spelling-drift surnames). ONLY blank emails were filled — the 2 existing emails were never overwritten. Sheet typos self-resolved where one variant matched the person's own name (rthakut→rthakur, beeertown→beertown, kbutterwich→kbutterwick, etc.). Data-only op (execute_sql, updated_by_name stamped, summary row in people_center_audit_log); no code or schema changes.
 **Roadmap:** Directory data quality -> emails now populated for the management roster; this also feeds the CGOPS auth email-autolink path.
