@@ -24,7 +24,7 @@ import type { UserProfile } from '../../types'
 interface VisitPerson {
   id: string
   full_name: string
-  status: 'active' | 'leave' | 'departed' | 'incoming' | 'candidate'
+  status: 'active' | 'leave' | 'departed' | 'incoming' | 'candidate' | 'departing'
   person_kind: 'manager' | 'emerging_leader' | 'key_team_member'
   data_quality_status: 'ok' | 'needs_review'
   position_assignments: {
@@ -329,6 +329,11 @@ export function VisitView({ session, profile }: VisitViewProps) {
                         {p.status === 'incoming' && (
                           <span className="rounded-full bg-info/10 px-1.5 text-[10px] font-medium text-info">
                             incoming
+                          </span>
+                        )}
+                        {p.status === 'departing' && (
+                          <span className="rounded-full bg-warning/10 px-1.5 text-[10px] font-medium text-warning">
+                            departing
                           </span>
                         )}
                       </span>

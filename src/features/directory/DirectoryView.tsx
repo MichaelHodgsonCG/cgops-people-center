@@ -28,7 +28,8 @@ interface DirectoryPerson {
   id: string
   full_name: string
   preferred_name: string | null
-  status: 'active' | 'leave' | 'departed' | 'incoming' | 'candidate'
+  status: 'active' | 'leave' | 'departed' | 'incoming' | 'candidate' | 'departing'
+  departed_on: string | null // last day: scheduled (departing) or actual (departed)
   person_kind: 'manager' | 'emerging_leader' | 'key_team_member'
   off_roster: boolean
   hire_date: string | null
@@ -124,7 +125,7 @@ export function DirectoryView({ session, profile, isAdmin }: DirectoryViewProps)
     supabase
       .from('people_center_people')
       .select(
-        `id, full_name, preferred_name, status, person_kind, off_roster, hire_date,
+        `id, full_name, preferred_name, status, person_kind, off_roster, hire_date, departed_on,
          data_quality_status, data_quality_note,
          position_assignments:people_center_position_assignments ( is_primary, ended_on,
            positions:people_center_positions ( name ),
@@ -466,6 +467,10 @@ export function DirectoryView({ session, profile, isAdmin }: DirectoryViewProps)
                           <span className="rounded-full bg-cg-orange-soft px-2 py-0.5 text-[11px] font-medium text-cg-orange">
                             Candidate
                           </span>
+                        ) : p.status === 'departing' ? (
+                          <span className="rounded-full bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning">
+                            Departing{p.departed_on ? ` · ${p.departed_on}` : ''}
+                          </span>
                         ) : (
                           <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[11px] capitalize text-charcoal/70">
                             {p.status}
@@ -557,6 +562,10 @@ export function DirectoryView({ session, profile, isAdmin }: DirectoryViewProps)
                         ) : p.status === 'candidate' ? (
                           <span className="rounded-full bg-cg-orange-soft px-2 py-0.5 text-xs font-medium text-cg-orange">
                             Candidate
+                          </span>
+                        ) : p.status === 'departing' ? (
+                          <span className="rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning">
+                            Departing{p.departed_on ? ` · last day ${p.departed_on}` : ''}
                           </span>
                         ) : (
                           <span className="capitalize">{p.status}</span>

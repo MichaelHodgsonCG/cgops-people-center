@@ -41,7 +41,7 @@ export interface PersonDetail {
   preferred_name: string | null
   email: string | null
   phone: string | null
-  status: 'active' | 'leave' | 'departed' | 'incoming' | 'candidate'
+  status: 'active' | 'leave' | 'departed' | 'incoming' | 'candidate' | 'departing'
   person_kind: 'manager' | 'emerging_leader' | 'key_team_member'
   off_roster: boolean
   hire_date: string | null
@@ -187,6 +187,9 @@ export interface ProfileEdits {
   email: string | null
   phone: string | null
   status: PersonDetail['status']
+  // Last day: scheduled when status='departing' (notice given), actual when
+  // 'departed'. The editor nulls it for every other status.
+  departed_on: string | null
   person_kind: PersonDetail['person_kind']
   off_roster: boolean
   home_city: string | null

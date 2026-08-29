@@ -237,6 +237,14 @@ export function PersonPanel({ personId, session, profile, onClose, onChanged }: 
           />
         ) : (
           <div className="space-y-5 p-5">
+            {person.status === 'departing' && (
+              <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning">
+                Departing — last day {person.departed_on ?? 'not set'}
+                {person.departed_on &&
+                  ` (${Math.max(0, Math.ceil((Date.parse(person.departed_on) - Date.now()) / 86400000))} days)`}
+                . Still in seat until then; flip to Departed when they leave.
+              </p>
+            )}
             {person.status === 'departed' && (
               <p className="rounded-md border border-surface-line bg-surface-muted px-3 py-2 text-sm text-charcoal/70">
                 Departed{person.departed_on ? ` ${person.departed_on}` : ''} — notes
@@ -828,6 +836,7 @@ function AdminEditor({
     email: person.email,
     phone: person.phone,
     status: person.status,
+    departed_on: person.departed_on,
     person_kind: person.person_kind,
     off_roster: person.off_roster,
     home_city: person.home_city,
@@ -888,7 +897,13 @@ function AdminEditor({
     setSaving(true)
     setError(null)
     try {
-      await updatePersonProfile(actor, person.id, person.full_name, edits)
+      // The last-day date only travels with departing/departed; any other
+      // status clears it so a reactivated person doesn't keep a stale date.
+      const keepDate = edits.status === 'departing' || edits.status === 'departed'
+      await updatePersonProfile(actor, person.id, person.full_name, {
+        ...edits,
+        departed_on: keepDate ? edits.departed_on : null,
+      })
       const positionChanged =
         positionId &&
         locationId &&
@@ -1015,9 +1030,20 @@ function AdminEditor({
             <option value="incoming">Incoming (not started yet)</option>
             <option value="active">Active</option>
             <option value="leave">Leave</option>
+            <option value="departing">Departing (notice given)</option>
             <option value="departed">Departed</option>
           </select>
         </Field>
+        {(edits.status === 'departing' || edits.status === 'departed') && (
+          <Field label={edits.status === 'departing' ? 'Last day (notice)' : 'Departed on'}>
+            <input
+              type="date"
+              value={edits.departed_on ?? ''}
+              onChange={(e) => set('departed_on', e.target.value || null)}
+              className="w-full rounded-md border border-surface-line bg-surface px-2 py-1.5 text-sm"
+            />
+          </Field>
+        )}
         <Field label="Off-roster (HQ / not in Push)">
           <label className="flex items-center gap-2 py-1.5 text-sm">
             <input

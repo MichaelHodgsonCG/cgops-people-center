@@ -83,7 +83,8 @@ export async function fetchIncomingSeats(): Promise<UpcomingSeat[]> {
         !!r.person &&
         (r.person.status === 'incoming' ||
           r.person.status === 'active' ||
-          r.person.status === 'leave'),
+          r.person.status === 'leave' ||
+          r.person.status === 'departing'),
     )
     .map((r) => ({
       id: `asg:${r.id}`,

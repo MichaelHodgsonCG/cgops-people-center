@@ -543,7 +543,8 @@ export async function fetchCompanyGaps(includeIncoming = true): Promise<CompanyG
     if (!a.position_id || !a.location || !a.person) continue
     const k = key(a.location.id, a.position_id)
     const st = a.person.status
-    if (st !== 'incoming' && st !== 'active' && st !== 'leave') continue
+    // 'departing' still fills the seat — they're in it until their last day.
+    if (st !== 'incoming' && st !== 'active' && st !== 'leave' && st !== 'departing') continue
     const cell = a.location.status === 'open' ? curByCell : a.location.status === 'opening' ? openingAsgByCell : null
     if (!cell) continue
     const arr = cell.get(k) ?? []
@@ -816,7 +817,7 @@ export async function fetchFillForLocation(
     }
     for (const r of (asgRes.data as unknown as AsgRow[]) ?? []) {
       const st = r.person?.status
-      if (r.person && (st === 'incoming' || st === 'active' || st === 'leave')) {
+      if (r.person && (st === 'incoming' || st === 'active' || st === 'leave' || st === 'departing')) {
         addUnique(r.position_id, r.person.id, r.person.full_name, st === 'incoming')
       }
     }
@@ -843,7 +844,9 @@ export async function fetchFillForLocation(
     // seat; incoming hires are tracked separately as maybes.
     if (!r.person) continue
     const st = r.person.status
-    if (st === 'active' || st === 'leave') add(r.position_id, r.person.full_name, false)
+    // 'departing' counts as in-seat until their last day (like active).
+    if (st === 'active' || st === 'leave' || st === 'departing')
+      add(r.position_id, r.person.full_name, false)
     else if (st === 'incoming') add(r.position_id, r.person.full_name, true)
   }
   return map
@@ -952,7 +955,7 @@ export async function fetchLocationRoster(
     }
     for (const r of (asgRes.data as unknown as AsgRow[]) ?? []) {
       const st = r.person?.status
-      if (r.person && (st === 'incoming' || st === 'active' || st === 'leave')) {
+      if (r.person && (st === 'incoming' || st === 'active' || st === 'leave' || st === 'departing')) {
         addUnique(r.position_id, r.person.id, r.person.full_name, st === 'incoming')
       }
     }
@@ -971,7 +974,7 @@ export async function fetchLocationRoster(
     person: { id: string; full_name: string; status: string } | null
   }
   const rows = ((data as unknown as Row[]) ?? []).filter(
-    (r) => r.person && ['active', 'leave', 'incoming'].includes(r.person.status),
+    (r) => r.person && ['active', 'leave', 'incoming', 'departing'].includes(r.person.status),
   )
 
   // Who among them is slated to an upcoming site — their move opens this seat.

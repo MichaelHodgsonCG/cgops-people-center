@@ -28,7 +28,7 @@ import './orgChart.css'
 interface OrgPerson {
   id: string
   full_name: string
-  status: 'active' | 'leave' | 'departed' | 'incoming' | 'candidate'
+  status: 'active' | 'leave' | 'departed' | 'incoming' | 'candidate' | 'departing'
   person_kind: 'manager' | 'emerging_leader' | 'key_team_member'
   manager_person_id: string | null
   data_quality_status: 'ok' | 'needs_review'
@@ -504,6 +504,11 @@ function TreeRow({
               incoming
             </span>
           )}
+          {p.status === 'departing' && (
+            <span className="rounded-full bg-warning/10 px-1.5 text-[10px] font-medium text-warning">
+              departing
+            </span>
+          )}
           {p.data_quality_status === 'needs_review' && (
             <AlertTriangle className="h-3 w-3 shrink-0 text-warning" />
           )}
@@ -584,6 +589,11 @@ function ChartNode({
         {p.status === 'incoming' && (
           <span className="rounded-full bg-info/10 px-1.5 text-[10px] font-medium text-info">
             incoming
+          </span>
+        )}
+        {p.status === 'departing' && (
+          <span className="rounded-full bg-warning/10 px-1.5 text-[10px] font-medium text-warning">
+            departing
           </span>
         )}
         {hasChildren && (
