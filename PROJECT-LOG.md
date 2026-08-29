@@ -1,5 +1,12 @@
 # Project Log
 
+## [2026-08-29] Person panel: "Add to seat" beside the note composer
+**Shipped:** Follow-on to the Visit-view seat flow, per Michael: the cheat-sheet panel now has an "Add to seat" button next to "Add note" (executive/admin only). The person is pre-loaded — pick role + location from the curated dropdowns and save; reassignPrimary applies the identical audited semantics (current primary seat ended today, history kept, timeline event, loud RLS failure). The card shows the current seat before saving; success lands in the panel's saved-notice strip and both the panel and the underlying view refresh. Build passes; merged to main.
+**Roadmap:** Seat edits now one click away from all three vantage points: the location roster (Visit), the org chart bucket (reporting lines), and the person panel.
+**Decisions:** Placed inside the notes section header row as asked; reused the same reassignPrimary path as everywhere else — one write path for seating, three entry points.
+**Blockers:** none.
+**Next:** none queued.
+
 ## [2026-08-29] Visit view: inline "Add to a seat" at the chosen location
 **Shipped:** From a location's people list in the Visit view (Michael's ask, standing in Beertown Whitby), executives/admins can now seat someone without leaving the page: "Add to a seat" opens an inline card with a roster typeahead (PersonPicker, linked people only — free text is rejected with a pointer to the add-person flows) and a role dropdown (People-Center-curated positions). Saving reuses the person panel's reassignPrimary semantics exactly: the person's current primary seat is ended today (history kept), the new primary starts here, audited + timeline event, loud error if RLS blocks. The card shows the person's current seat BEFORE saving so a move is never a surprise; the list refreshes in place. Build passes; merged to main.
 **Roadmap:** Visit flow -> now read AND fix: notes + reporting were already editable in the panel; seating is now inline too.
