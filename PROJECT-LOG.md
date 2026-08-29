@@ -1,5 +1,12 @@
 # Project Log
 
+## [2026-08-29] Upcoming/planned org shows every seat (multi-seat display fix)
+**Shipped:** Michael seated DeMar Lewis as a second Sous Chef at Beertown Peterborough (via the new add-to-seat flow) and he was invisible in the Planned org modal — the upcoming-roster merge collapsed to ONE seat per (location, role) with succession winning, and the modal rendered one name per role. Fixed both: the merge now unions ALL slated seats with people assigned via primary assignments, de-duped by person per location (an assigned person fills an unnamed slated seat for their role when one exists, otherwise adds an extra seat), and the Planned org modal renders every occupant per role with a ×N badge and per-person "moving from" flags. OPEN still means zero occupants. Verified DeMar's live row (active, primary Sous Chef, Beertown Peterborough) so he now shows beside Alex Hood as Sous ×2. Also enriches the Upcoming cards' slated lists. Build passes; merged to main.
+**Roadmap:** Multi-seat correctness now reaches the last surface that didn't have it (Bench, gaps, import were already multi-seat since 2026-07-24).
+**Decisions:** De-dupe by person, not by role — someone both slated and assigned counts once (succession representation wins). "Moving from" computed per occupant, so a mover and a settled person can share a role row honestly.
+**Blockers:** none.
+**Next:** none queued.
+
 ## [2026-08-29] Person panel: "Add to seat" beside the note composer
 **Shipped:** Follow-on to the Visit-view seat flow, per Michael: the cheat-sheet panel now has an "Add to seat" button next to "Add note" (executive/admin only). The person is pre-loaded — pick role + location from the curated dropdowns and save; reassignPrimary applies the identical audited semantics (current primary seat ended today, history kept, timeline event, loud RLS failure). The card shows the current seat before saving; success lands in the panel's saved-notice strip and both the panel and the underlying view refresh. Build passes; merged to main.
 **Roadmap:** Seat edits now one click away from all three vantage points: the location roster (Visit), the org chart bucket (reporting lines), and the person panel.
