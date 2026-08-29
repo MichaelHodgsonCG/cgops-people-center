@@ -23,6 +23,7 @@ import { actorFrom, type Actor } from '../../lib/activity'
 import { errText } from '../../lib/errText'
 import { can, toPermissionUser } from '../../permissions'
 import { DevelopmentPathSection } from './DevelopmentPathSection'
+import { QuarterlyGoalsSection } from './QuarterlyGoalsSection'
 import type {
   Note,
   NoteCategory,
@@ -289,6 +290,15 @@ export function PersonPanel({ personId, session, profile, onClose, onChanged }: 
             {/* Development path — chain-visible projection (ADR 0010);
                 renders nothing when RLS returns no assessments */}
             <DevelopmentPathSection personId={person.id} />
+
+            {/* Quarterly development goals (F27) — UTL tasks; editors are HQ
+                + the subject's chain (mirrors the goals RLS) */}
+            <QuarterlyGoalsSection
+              personId={person.id}
+              personName={person.full_name}
+              actor={actor}
+              canEdit={isHqAltitude || (managerRole && viewerIsAbove)}
+            />
 
             {/* Notes */}
             <section className="rounded-xl border border-surface-line p-4">

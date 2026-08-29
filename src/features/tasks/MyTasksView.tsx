@@ -20,6 +20,7 @@ import {
   type CompanyGap,
   type GapAssignment,
 } from '../gaps/api'
+import { GOAL_KIND_LABELS, fetchMyGoals, type DevGoal } from './api'
 import type { UserProfile } from '../../types'
 
 type Bucket = 'overdue' | 'week' | 'fortnight' | 'later'
@@ -44,14 +45,26 @@ const REASON_LABEL: Record<CompanyGap['reason'], string> = {
   understaffed: 'Understaffed',
 }
 
-interface MyTask {
-  assignment: GapAssignment
-  gap: CompanyGap
-  role: 'owner' | 'support'
-  due: string | null // target date, falling back to the gap's needed-by
-  asap: boolean // understaffed with no date = needed now
-  bucket: Bucket
-}
+type MyTask =
+  | {
+      type: 'gap'
+      id: string
+      assignment: GapAssignment
+      gap: CompanyGap
+      role: 'owner' | 'support'
+      due: string | null // target date, falling back to the gap's needed-by
+      asap: boolean // understaffed with no date = needed now
+      bucket: Bucket
+    }
+  | {
+      type: 'goal'
+      id: string
+      goal: DevGoal
+      role: 'owner' | 'support'
+      due: string | null
+      asap: boolean
+      bucket: Bucket
+    }
 
 const fmtDate = (iso: string) =>
   new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, {
@@ -79,18 +92,24 @@ export function MyTasksView({ profile }: MyTasksViewProps) {
   const personId = profile?.person_id ?? null
   const [gaps, setGaps] = useState<CompanyGap[]>([])
   const [assignMap, setAssignMap] = useState<Map<string, GapAssignment[]>>(new Map())
+  const [goals, setGoals] = useState<DevGoal[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    Promise.all([fetchCompanyGaps(true), fetchGapAssignments()])
-      .then(([g, a]) => {
+    Promise.all([
+      fetchCompanyGaps(true),
+      fetchGapAssignments(),
+      personId ? fetchMyGoals(personId) : Promise.resolve([]),
+    ])
+      .then(([g, a, myGoals]) => {
         setGaps(g)
         setAssignMap(a)
+        setGoals(myGoals)
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [])
+  }, [personId])
 
   const tasks = useMemo<MyTask[]>(() => {
     if (!personId) return []
@@ -107,16 +126,28 @@ export function MyTasksView({ profile }: MyTasksViewProps) {
         if (!role) continue
         const due = a.target_date ?? g.needed_by
         const asap = !due && g.reason === 'understaffed'
-        out.push({ assignment: a, gap: g, role, due, asap, bucket: bucketOf(due, asap) })
+        out.push({ type: 'gap', id: a.id, assignment: a, gap: g, role, due, asap, bucket: bucketOf(due, asap) })
       }
+    }
+    for (const goal of goals) {
+      const role = goal.owner_person_id === personId ? 'owner' : 'support'
+      out.push({
+        type: 'goal',
+        id: goal.id,
+        goal,
+        role,
+        due: goal.due_date,
+        asap: false,
+        bucket: bucketOf(goal.due_date, false),
+      })
     }
     return out.sort(
       (a, b) =>
         BUCKETS.indexOf(a.bucket) - BUCKETS.indexOf(b.bucket) ||
         (a.due ?? '9999').localeCompare(b.due ?? '9999') ||
-        a.gap.location_name.localeCompare(b.gap.location_name),
+        a.id.localeCompare(b.id),
     )
-  }, [gaps, assignMap, personId])
+  }, [gaps, assignMap, goals, personId])
 
   const counts = useMemo(() => {
     const c: Record<Bucket, number> = { overdue: 0, week: 0, fortnight: 0, later: 0 }
@@ -133,8 +164,9 @@ export function MyTasksView({ profile }: MyTasksViewProps) {
         <ListTodo className="h-5 w-5 text-cg-orange" /> My Tasks
       </h2>
       <p className="mt-1 mb-4 text-sm text-charcoal/60">
-        Open seats you're responsible for filling (or supporting), across every location. A task
-        clears itself when the seat is filled — slated in the Bench, assigned, or hired.
+        Your quarterly development goals, and the open seats you're responsible for filling (or
+        supporting). Seat tasks clear themselves when the seat is filled; goals close from the
+        person panel.
       </p>
 
       {!personId ? (
@@ -165,13 +197,12 @@ export function MyTasksView({ profile }: MyTasksViewProps) {
                 {tasks
                   .filter((t) => t.bucket === b)
                   .map((t) => (
-                    <li
-                      key={t.assignment.id}
-                      className="rounded-lg border border-surface-line bg-surface px-3 py-2.5"
-                    >
+                    <li key={t.id} className="rounded-lg border border-surface-line bg-surface px-3 py-2.5">
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                         <span className="text-sm font-medium">
-                          Fill {t.gap.position_name} — {t.gap.location_name}
+                          {t.type === 'gap'
+                            ? `Fill ${t.gap.position_name} — ${t.gap.location_name}`
+                            : t.goal.title}
                         </span>
                         <span
                           className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
@@ -180,11 +211,27 @@ export function MyTasksView({ profile }: MyTasksViewProps) {
                               : 'bg-info/10 text-info'
                           }`}
                         >
-                          {t.role === 'owner' ? 'You own this' : 'You support'}
+                          {t.role === 'owner'
+                            ? t.type === 'goal'
+                              ? 'Your goal'
+                              : 'You own this'
+                            : t.type === 'goal'
+                              ? 'You coach'
+                              : 'You support'}
                         </span>
                         <span className="rounded-full bg-surface-muted px-1.5 py-0.5 text-[10px] text-charcoal/60">
-                          {REASON_LABEL[t.gap.reason]}
+                          {t.type === 'gap' ? REASON_LABEL[t.gap.reason] : GOAL_KIND_LABELS[t.goal.kind]}
                         </span>
+                        {t.type === 'goal' && t.goal.status === 'blocked' && (
+                          <span className="rounded-full bg-danger/10 px-1.5 py-0.5 text-[10px] font-medium text-danger">
+                            blocked
+                          </span>
+                        )}
+                        {t.type === 'goal' && t.goal.fiscal_year && t.goal.quarter && (
+                          <span className="rounded-full bg-surface-muted px-1.5 py-0.5 text-[10px] text-charcoal/60">
+                            F{String(t.goal.fiscal_year).slice(-2)} Q{t.goal.quarter}
+                          </span>
+                        )}
                       </div>
                       <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-charcoal/60">
                         <span className="flex items-center gap-1">
@@ -199,14 +246,29 @@ export function MyTasksView({ profile }: MyTasksViewProps) {
                             'no date set'
                           )}
                         </span>
-                        {t.role === 'owner' && t.assignment.support_name && (
-                          <span>support: {t.assignment.support_name}</span>
+                        {t.type === 'gap' ? (
+                          <>
+                            {t.role === 'owner' && t.assignment.support_name && (
+                              <span>support: {t.assignment.support_name}</span>
+                            )}
+                            {t.role === 'support' && t.assignment.owner_name && (
+                              <span>owner: {t.assignment.owner_name}</span>
+                            )}
+                            {t.assignment.note && <span>· {t.assignment.note}</span>}
+                            {t.gap.detail && <span className="text-charcoal/45">· {t.gap.detail}</span>}
+                          </>
+                        ) : (
+                          <>
+                            {t.role === 'owner' && t.goal.support_name && <span>coach: {t.goal.support_name}</span>}
+                            {t.role === 'support' && <span>for: {t.goal.owner_name}</span>}
+                            {(t.goal.baseline || t.goal.target) && (
+                              <span>
+                                {t.goal.baseline || '—'} → {t.goal.target || '—'}
+                              </span>
+                            )}
+                            {t.goal.checkin1_on && <span>check-in: {fmtDate(t.goal.checkin1_on)}</span>}
+                          </>
                         )}
-                        {t.role === 'support' && t.assignment.owner_name && (
-                          <span>owner: {t.assignment.owner_name}</span>
-                        )}
-                        {t.assignment.note && <span>· {t.assignment.note}</span>}
-                        {t.gap.detail && <span className="text-charcoal/45">· {t.gap.detail}</span>}
                       </p>
                     </li>
                   ))}
