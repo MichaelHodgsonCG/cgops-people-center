@@ -6,9 +6,19 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import { AlertTriangle, ArrowLeft, ChevronRight, MapPin, Search, Users } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ChevronRight, MapPin, Plus, Search, Users } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { PersonPanel } from '../people/PersonPanel'
+import { PersonPicker, type PickedPerson } from '../../components/PersonPicker'
+import {
+  fetchPersonDetail,
+  fetchReferenceOptions,
+  reassignPrimary,
+  type ReferenceOption,
+} from '../people/api'
+import { actorFrom } from '../../lib/activity'
+import { errText } from '../../lib/errText'
+import { can, toPermissionUser } from '../../permissions'
 import type { UserProfile } from '../../types'
 
 interface VisitPerson {
@@ -79,6 +89,22 @@ export function VisitView({ session, profile }: VisitViewProps) {
   )
   const [query, setQuery] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // Inline "add person to a seat" at the chosen location (executive/admin) —
+  // reuses the person panel's reassignment semantics: the pick becomes the
+  // person's PRIMARY seat here; their current primary is ended today.
+  const canEdit = can(profile ? toPermissionUser(profile) : null, 'update', 'person')
+  const actor = actorFrom(profile, session)
+  const [adding, setAdding] = useState(false)
+  const [refs, setRefs] = useState<{ positions: ReferenceOption[]; locations: ReferenceOption[] } | null>(null)
+  const [pickPerson, setPickPerson] = useState<PickedPerson>({ name: '', personId: null })
+  const [roleId, setRoleId] = useState('')
+  const [addSaving, setAddSaving] = useState(false)
+  const [addErr, setAddErr] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!adding || refs !== null) return
+    fetchReferenceOptions().then(setRefs).catch((e: Error) => setAddErr(e.message))
+  }, [adding, refs])
 
   const load = useCallback(() => {
     supabase
@@ -137,6 +163,47 @@ export function VisitView({ session, profile }: VisitViewProps) {
   // Chosen location no longer has anyone (data changed) — fall back to picker.
   const atLocation = location ? byLocation.get(location) ?? [] : null
 
+  // Options for the add-to-seat person picker: everyone loaded (non-departed),
+  // roster-linked only (no free text — a seat needs a real person record).
+  const seatPeople = useMemo(
+    () => people.map((p) => ({ id: p.id, full_name: p.full_name })),
+    [people],
+  )
+  // What the pick will do to the chosen person — their current primary seat
+  // is ended when they take this one, so say so before saving.
+  const pickedCurrent = useMemo(() => {
+    if (!pickPerson.personId) return null
+    const p = people.find((x) => x.id === pickPerson.personId)
+    if (!p) return null
+    const cur = currentPrimary(p)
+    if (!cur) return 'no current seat'
+    return `${cur.positions?.name ?? 'unknown role'}${cur.locations?.name ? ` — ${cur.locations.name}` : ''}`
+  }, [pickPerson.personId, people])
+
+  async function addToSeat() {
+    if (!location || !pickPerson.personId || !roleId || !refs) return
+    const locId = refs.locations.find((l) => l.name === location)?.id
+    const pos = refs.positions.find((x) => x.id === roleId)
+    if (!locId || !pos) {
+      setAddErr('Could not resolve this location or role — use the person panel instead.')
+      return
+    }
+    setAddSaving(true)
+    setAddErr(null)
+    try {
+      const detail = await fetchPersonDetail(pickPerson.personId)
+      await reassignPrimary(actor, detail, pos.id, locId, pos.name, location)
+      setAdding(false)
+      setPickPerson({ name: '', personId: null })
+      setRoleId('')
+      load()
+    } catch (e) {
+      setAddErr(errText(e))
+    } finally {
+      setAddSaving(false)
+    }
+  }
+
   if (loading) return <p className="p-6 text-sm text-charcoal/50">Loading…</p>
   if (error) return <p className="p-6 text-sm text-danger">Could not load: {error}</p>
 
@@ -159,7 +226,82 @@ export function VisitView({ session, profile }: VisitViewProps) {
               {atLocation.length} {atLocation.length === 1 ? 'person' : 'people'}
             </p>
           </div>
+          {canEdit && !adding && (
+            <button
+              onClick={() => {
+                setAdding(true)
+                setAddErr(null)
+              }}
+              className="ml-auto flex items-center gap-1 rounded-md border border-surface-line px-2.5 py-1.5 text-sm font-medium hover:bg-surface-muted"
+            >
+              <Plus className="h-4 w-4" /> Add to a seat
+            </button>
+          )}
         </div>
+
+        {canEdit && adding && (
+          <div className="mb-3 rounded-xl border border-cg-orange/40 bg-cg-orange-soft/30 p-3.5">
+            <p className="mb-2 text-sm font-medium">Add a person to a seat at {location}</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="text-sm">
+                <span className="mb-0.5 block text-[11px] text-charcoal/50">Who</span>
+                <PersonPicker
+                  people={seatPeople}
+                  value={pickPerson}
+                  onChange={setPickPerson}
+                  placeholder="Search people…"
+                />
+              </label>
+              <label className="text-sm">
+                <span className="mb-0.5 block text-[11px] text-charcoal/50">Seat (role)</span>
+                <select
+                  value={roleId}
+                  onChange={(e) => setRoleId(e.target.value)}
+                  className="w-full rounded-md border border-surface-line bg-surface px-2 py-1.5 text-sm"
+                >
+                  <option value="">{refs === null ? 'Loading roles…' : 'Choose a role…'}</option>
+                  {(refs?.positions ?? []).map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            {pickPerson.personId && pickedCurrent && (
+              <p className="mt-2 text-[11px] text-charcoal/60">
+                {pickPerson.name} currently: {pickedCurrent}
+                {pickedCurrent !== 'no current seat' &&
+                  ' — that seat is ended today when this one is saved (history kept).'}
+              </p>
+            )}
+            {pickPerson.name.trim() !== '' && !pickPerson.personId && (
+              <p className="mt-2 text-[11px] text-warning">
+                Pick a person from the list — seats need an existing person record. To add a brand-new
+                hire, use Directory → add person / incoming hire first.
+              </p>
+            )}
+            {addErr && <p className="mt-2 text-xs text-danger">{addErr}</p>}
+            <div className="mt-3 flex gap-2">
+              <button
+                onClick={() => void addToSeat()}
+                disabled={addSaving || !pickPerson.personId || !roleId || refs === null}
+                className="rounded-md bg-cg-orange px-3 py-1.5 text-sm font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
+              >
+                {addSaving ? 'Saving…' : 'Add to seat'}
+              </button>
+              <button
+                onClick={() => {
+                  setAdding(false)
+                  setAddErr(null)
+                }}
+                className="rounded-md border border-surface-line px-3 py-1.5 text-sm hover:bg-surface-muted"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         {atLocation.length === 0 ? (
           <p className="rounded-xl border border-surface-line bg-surface p-8 text-center text-sm text-charcoal/60">
