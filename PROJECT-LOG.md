@@ -1,5 +1,12 @@
 # Project Log
 
+## [2026-08-29] Visit view: inline "Add to a seat" at the chosen location
+**Shipped:** From a location's people list in the Visit view (Michael's ask, standing in Beertown Whitby), executives/admins can now seat someone without leaving the page: "Add to a seat" opens an inline card with a roster typeahead (PersonPicker, linked people only — free text is rejected with a pointer to the add-person flows) and a role dropdown (People-Center-curated positions). Saving reuses the person panel's reassignPrimary semantics exactly: the person's current primary seat is ended today (history kept), the new primary starts here, audited + timeline event, loud error if RLS blocks. The card shows the person's current seat BEFORE saving so a move is never a surprise; the list refreshes in place. Build passes; merged to main.
+**Roadmap:** Visit flow -> now read AND fix: notes + reporting were already editable in the panel; seating is now inline too.
+**Decisions:** Existing people only — creating a brand-new person mid-visit stays in the Directory/incoming-hire flows (those need manager, status, and kind decisions that don't belong in a quick seat-fill). One primary seat per person is preserved (reassign, never a second primary).
+**Blockers:** none.
+**Next:** none queued.
+
 ## [2026-08-25] Org chart: inline manager assignment for unassigned people
 **Shipped:** The "No reporting line" bucket on the Org Chart is now editable in place (Michael's ask, from the live page showing 7 unassigned at BT London White Oaks). Each row gets a "Reports to…" dropdown (same candidate list as the person panel's reporting-line editor, labels with position · location, self excluded); picking a manager saves via the existing setManager (audited + timeline event, loud failure if RLS blocks) and reloads, so the person jumps straight into their manager's team. Visible only to roles that can edit people (executive/admin); everyone else keeps the read-only list. Names still open the full person panel. Cycle-safe by construction — bucket members have no manager and no reports. Build passes; merged to main.
 **Roadmap:** Org chart hygiene -> unassigned people fixable without leaving the page.
