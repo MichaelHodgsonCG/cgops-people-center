@@ -96,19 +96,39 @@ export function UpcomingView({ session: _session, profile }: UpcomingViewProps) 
 
   useEffect(() => {
     if (!canPlan) return
-    // Upcoming roster = slated leaders (succession) ∪ incoming external hires
-    // assigned to the site. Merge per (location, position): a succession seat
-    // wins unless it's unnamed and an incoming hire actually fills that seat.
+    // Upcoming roster = ALL slated seats (succession) ∪ people assigned to the
+    // site via a primary assignment, de-duped by PERSON per location — so a
+    // role can hold several seats (Sous ×2: one slated, one assigned). An
+    // assigned person fills an unnamed slated seat for their role when one
+    // exists; otherwise they add an extra seat.
     Promise.all([fetchUpcomingSeats(), fetchIncomingSeats()])
       .then(([slated, incoming]) => {
-        const byKey = new Map<string, UpcomingSeat>()
-        const k = (s: UpcomingSeat) => `${norm(s.location_name ?? '')}|${s.position_id ?? ''}`
-        for (const s of slated) byKey.set(k(s), s)
-        for (const s of incoming) {
-          const existing = byKey.get(k(s))
-          if (!existing || !existing.incumbent_name) byKey.set(k(s), s)
+        const out = [...slated]
+        const personsAt = new Map<string, Set<string>>() // location -> person ids
+        const noteAt = (loc: string, personId: string | null) => {
+          if (!personId) return
+          if (!personsAt.has(loc)) personsAt.set(loc, new Set())
+          personsAt.get(loc)!.add(personId)
         }
-        setSeats([...byKey.values()])
+        for (const s of slated) noteAt(norm(s.location_name ?? ''), s.incumbent_person_id)
+        for (const s of incoming) {
+          const loc = norm(s.location_name ?? '')
+          if (s.incumbent_person_id && personsAt.get(loc)?.has(s.incumbent_person_id)) continue
+          const vacant = out.find(
+            (x) =>
+              norm(x.location_name ?? '') === loc &&
+              x.position_id === s.position_id &&
+              !x.incumbent_name,
+          )
+          if (vacant) {
+            vacant.incumbent_person_id = s.incumbent_person_id
+            vacant.incumbent_name = s.incumbent_name
+          } else {
+            out.push(s)
+          }
+          noteAt(loc, s.incumbent_person_id)
+        }
+        setSeats(out)
       })
       .catch(() => setSeats([]))
   }, [canPlan])

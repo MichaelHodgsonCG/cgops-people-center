@@ -17,12 +17,16 @@ import {
 
 const norm = (s: string) => s.trim().toLowerCase()
 
+interface Occupant {
+  name: string
+  movingFrom: string | null // current site, when the slated leader works elsewhere
+}
+
 interface OrgNode {
   positionId: string
   name: string
   level: number
-  slatedName: string | null
-  movingFrom: string | null // current site, when the slated leader works elsewhere
+  occupants: Occupant[] // every filled seat for this role (multi-seat aware)
   children: OrgNode[]
 }
 
@@ -53,8 +57,15 @@ export function PlannedOrgPanel({
   const roots = useMemo<OrgNode[]>(() => {
     if (!template) return []
     const tById = new Map(template.map((p) => [p.id, p]))
-    const seatByPos = new Map<string, UpcomingSeat>()
-    for (const s of seats) if (s.position_id) seatByPos.set(s.position_id, s)
+    // ALL seats per position — a role can hold several (Sous ×2), whether
+    // slated in the Bench or placed via a position assignment.
+    const seatsByPos = new Map<string, UpcomingSeat[]>()
+    for (const s of seats) {
+      if (!s.position_id) continue
+      const arr = seatsByPos.get(s.position_id) ?? []
+      arr.push(s)
+      seatsByPos.set(s.position_id, arr)
+    }
 
     const included = new Set<string>()
     // Seed the full restaurant management roster (manager + people-center
@@ -76,18 +87,24 @@ export function PlannedOrgPanel({
     const nodes = new Map<string, OrgNode>()
     for (const pid of included) {
       const tp = tById.get(pid)
-      const seat = seatByPos.get(pid)
-      const cur = seat?.incumbent_person_id ? current.get(seat.incumbent_person_id) : undefined
-      const movingFrom =
-        cur?.location_name && norm(cur.location_name) !== norm(siteName)
-          ? cur.location_name
-          : null
+      const occupants: Occupant[] = (seatsByPos.get(pid) ?? [])
+        .filter((s) => s.incumbent_name)
+        .map((s) => {
+          const cur = s.incumbent_person_id ? current.get(s.incumbent_person_id) : undefined
+          return {
+            name: s.incumbent_name!,
+            movingFrom:
+              cur?.location_name && norm(cur.location_name) !== norm(siteName)
+                ? cur.location_name
+                : null,
+          }
+        })
+        .sort((a, b) => a.name.localeCompare(b.name))
       nodes.set(pid, {
         positionId: pid,
         name: tp?.name ?? 'Role',
         level: tp?.level ?? Number.POSITIVE_INFINITY,
-        slatedName: seat?.incumbent_name ?? null,
-        movingFrom,
+        occupants,
         children: [],
       })
     }
@@ -163,7 +180,10 @@ export function PlannedOrgPanel({
 }
 
 function countGaps(nodes: OrgNode[]): number {
-  return nodes.reduce((sum, n) => sum + (n.slatedName ? 0 : 1) + countGaps(n.children), 0)
+  return nodes.reduce(
+    (sum, n) => sum + (n.occupants.length > 0 ? 0 : 1) + countGaps(n.children),
+    0,
+  )
 }
 
 function SeatRow({ node, depth }: { node: OrgNode; depth: number }) {
@@ -173,19 +193,31 @@ function SeatRow({ node, depth }: { node: OrgNode; depth: number }) {
         className="flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded-md py-1 text-sm"
         style={{ paddingLeft: `${depth * 1.1}rem` }}
       >
-        <span className="text-charcoal/55">{node.name}</span>
+        <span className="text-charcoal/55">
+          {node.name}
+          {node.occupants.length > 1 && (
+            <span className="ml-1 rounded-full bg-surface-muted px-1.5 py-0.5 text-[10px] text-charcoal/50">
+              ×{node.occupants.length}
+            </span>
+          )}
+        </span>
         <span className="text-charcoal/30">—</span>
-        {node.slatedName ? (
-          <span className="font-medium">{node.slatedName}</span>
-        ) : (
+        {node.occupants.length === 0 ? (
           <span className="rounded-full bg-danger/10 px-1.5 py-0.5 text-[11px] font-medium text-danger">
             OPEN
           </span>
-        )}
-        {node.movingFrom && (
-          <span className="inline-flex items-center gap-0.5 rounded-full bg-warning/10 px-1.5 py-0.5 text-[11px] font-medium text-warning">
-            <ArrowRight className="h-3 w-3" /> moving from {node.movingFrom}
-          </span>
+        ) : (
+          node.occupants.map((o, i) => (
+            <span key={i} className="inline-flex items-center gap-1.5">
+              {i > 0 && <span className="text-charcoal/30">·</span>}
+              <span className="font-medium">{o.name}</span>
+              {o.movingFrom && (
+                <span className="inline-flex items-center gap-0.5 rounded-full bg-warning/10 px-1.5 py-0.5 text-[11px] font-medium text-warning">
+                  <ArrowRight className="h-3 w-3" /> moving from {o.movingFrom}
+                </span>
+              )}
+            </span>
+          ))
         )}
       </li>
       {node.children.map((c) => (
