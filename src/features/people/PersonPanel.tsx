@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import type { Session } from '@supabase/supabase-js'
 import {
   AlertTriangle,
+  Armchair,
   CheckCircle2,
   Eye,
   Heart,
@@ -18,7 +19,8 @@ import {
   Plus,
   X,
 } from 'lucide-react'
-import { actorFrom } from '../../lib/activity'
+import { actorFrom, type Actor } from '../../lib/activity'
+import { errText } from '../../lib/errText'
 import { can, toPermissionUser } from '../../permissions'
 import { DevelopmentPathSection } from './DevelopmentPathSection'
 import type {
@@ -290,6 +292,7 @@ export function PersonPanel({ personId, session, profile, onClose, onChanged }: 
                   <CheckCircle2 className="h-4 w-4 shrink-0" /> {savedNotice}
                 </p>
               )}
+              <div className="mb-4 flex flex-wrap items-start gap-2">
               {canWriteNotes ? (
                 <NoteForm
                   onSubmit={async (n) => {
@@ -319,6 +322,18 @@ export function PersonPanel({ personId, session, profile, onClose, onChanged }: 
                   }}
                 />
               ) : null}
+              {canEdit && (
+                <SeatComposer
+                  person={person}
+                  actor={actor}
+                  onSaved={(msg) => {
+                    setSavedNotice(msg)
+                    reload()
+                    onChanged()
+                  }}
+                />
+              )}
+              </div>
               <NoteList
                 notes={notes.filter(
                   (n) =>
@@ -432,6 +447,127 @@ function FactBlock({ label, value }: { label: string; value: string | null }) {
     <div className="mt-3">
       <p className="text-xs uppercase tracking-wide text-charcoal/40">{label}</p>
       <p className="whitespace-pre-wrap text-sm">{value}</p>
+    </div>
+  )
+}
+
+// Quick "Add to seat" beside the note composer (executive/admin): the person
+// is pre-loaded — pick role + location and reassignPrimary does the rest
+// (current primary ended today, history kept, audited + timeline event).
+// Same semantics as the Edit form's assignment change and the Visit-view
+// add-to-seat; this is just the one-click path from the cheat sheet.
+function SeatComposer({
+  person,
+  actor,
+  onSaved,
+}: {
+  person: PersonDetail
+  actor: Actor
+  onSaved: (msg: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [refs, setRefs] = useState<{
+    positions: ReferenceOption[]
+    locations: ReferenceOption[]
+  } | null>(null)
+  const [positionId, setPositionId] = useState('')
+  const [locationId, setLocationId] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open || refs !== null) return
+    fetchReferenceOptions().then(setRefs).catch((e: Error) => setError(e.message))
+  }, [open, refs])
+
+  const current = person.position_assignments.find((a) => a.is_primary && !a.ended_on)
+
+  async function save() {
+    if (!refs || !positionId || !locationId) return
+    const pos = refs.positions.find((p) => p.id === positionId)
+    const loc = refs.locations.find((l) => l.id === locationId)
+    if (!pos || !loc) return
+    setSaving(true)
+    setError(null)
+    try {
+      await reassignPrimary(actor, person, pos.id, loc.id, pos.name, loc.name)
+      setOpen(false)
+      setPositionId('')
+      setLocationId('')
+      onSaved(`Seat updated — ${person.full_name} is now ${pos.name} at ${loc.name}.`)
+    } catch (e) {
+      setError(errText(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="flex items-center gap-1.5 rounded-md border border-surface-line px-3 py-1.5 text-sm font-medium hover:bg-surface-muted"
+      >
+        <Armchair className="h-4 w-4" /> Add to seat
+      </button>
+    )
+  }
+
+  return (
+    <div className="w-full space-y-2 rounded-md border border-surface-line p-3">
+      <p className="text-sm font-medium">Move {person.full_name} to a seat</p>
+      <div className="flex flex-wrap gap-2">
+        <select
+          value={positionId}
+          onChange={(e) => setPositionId(e.target.value)}
+          className="rounded-md border border-surface-line bg-surface px-2 py-1.5 text-sm"
+        >
+          <option value="">{refs === null ? 'Loading roles…' : 'Role…'}</option>
+          {(refs?.positions ?? []).map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+        <select
+          value={locationId}
+          onChange={(e) => setLocationId(e.target.value)}
+          className="rounded-md border border-surface-line bg-surface px-2 py-1.5 text-sm"
+        >
+          <option value="">{refs === null ? 'Loading locations…' : 'Location…'}</option>
+          {(refs?.locations ?? []).map((l) => (
+            <option key={l.id} value={l.id}>
+              {l.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <p className="text-[11px] text-charcoal/60">
+        {current
+          ? `Current seat: ${current.positions?.name ?? '?'}${
+              current.locations?.name ? ` — ${current.locations.name}` : ''
+            } — it is ended today when this is saved (history kept).`
+          : 'No current seat — this becomes their primary seat.'}
+      </p>
+      {error && <p className="text-xs text-danger">{error}</p>}
+      <div className="flex gap-2">
+        <button
+          onClick={() => void save()}
+          disabled={saving || !positionId || !locationId || refs === null}
+          className="rounded-md bg-cg-orange px-3 py-1.5 text-sm font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
+        >
+          {saving ? 'Saving…' : 'Save seat'}
+        </button>
+        <button
+          onClick={() => {
+            setOpen(false)
+            setError(null)
+          }}
+          className="rounded-md border border-surface-line px-3 py-1.5 text-sm hover:bg-surface-muted"
+        >
+          Cancel
+        </button>
+      </div>
     </div>
   )
 }
@@ -594,7 +730,7 @@ function NoteForm({
     return (
       <button
         onClick={() => setOpen(true)}
-        className="mb-4 flex items-center gap-1.5 rounded-md bg-cg-orange px-3 py-1.5 text-sm font-medium text-white hover:bg-cg-orange-hover"
+        className="flex items-center gap-1.5 rounded-md bg-cg-orange px-3 py-1.5 text-sm font-medium text-white hover:bg-cg-orange-hover"
       >
         <Plus className="h-4 w-4" /> Add note
       </button>
@@ -602,7 +738,7 @@ function NoteForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="mb-4 space-y-3 rounded-md border border-surface-line p-3">
+    <form onSubmit={handleSubmit} className="w-full space-y-3 rounded-md border border-surface-line p-3">
       <div className="flex flex-wrap gap-2">
         <select
           value={category}
