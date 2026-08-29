@@ -1,26 +1,29 @@
 // Covered-locations admin picker (admin/executive). For a chosen user it shows
-// their EFFECTIVE coverage — region-derived default ∪ scope grants — with the
-// derivation of every location visible (so an admin understands WHY someone
-// sees it), respects the can_view_all flag, and lets them add/remove bespoke
-// scope grants. RLS enforces who may manage (migration 20260724150000);
-// this screen just drives it. Replaces the raw-SQL workflow.
+// their EFFECTIVE coverage — region-derived default ∪ assignment grants — with
+// the derivation of every location visible, respects the can_view_all flag,
+// and manages grants in the person-keyed store People Center owns under
+// ruling d98cb0cf (people_center_location_assignments). Also surfaces the
+// fail-closed exceptions list: logins that resolve to NO coverage, so an
+// absent permission is visible to someone who can fix it.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import { Eye, MapPin, Plus, ShieldCheck, Trash2 } from 'lucide-react'
+import { AlertTriangle, Eye, MapPin, Plus, ShieldCheck, Trash2 } from 'lucide-react'
 import { actorFrom } from '../../lib/activity'
 import { can, toPermissionUser } from '../../permissions'
 import type { UserProfile } from '../../types'
 import {
-  addScope,
+  addAssignment,
+  fetchAssignments,
+  fetchCoverageExceptions,
   fetchCoverageLocations,
   fetchRegions,
   fetchScopeUsers,
-  fetchScopes,
-  removeScope,
+  removeAssignment,
+  type Assignment,
+  type CoverageException,
   type CoverageLocation,
   type Region,
-  type ScopeGrant,
   type ScopeUser,
 } from './api'
 
@@ -42,8 +45,9 @@ export function CoverageView({ session, profile }: CoverageViewProps) {
   const [users, setUsers] = useState<ScopeUser[]>([])
   const [regions, setRegions] = useState<Region[]>([])
   const [locations, setLocations] = useState<CoverageLocation[]>([])
+  const [exceptions, setExceptions] = useState<CoverageException[]>([])
   const [selectedAuthId, setSelectedAuthId] = useState<string>('')
-  const [scopes, setScopes] = useState<ScopeGrant[]>([])
+  const [assignments, setAssignments] = useState<Assignment[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -53,33 +57,44 @@ export function CoverageView({ session, profile }: CoverageViewProps) {
   const [grantId, setGrantId] = useState('')
 
   useEffect(() => {
-    Promise.all([fetchScopeUsers(), fetchRegions(), fetchCoverageLocations()])
-      .then(([u, r, l]) => {
+    Promise.all([fetchScopeUsers(), fetchRegions(), fetchCoverageLocations(), fetchCoverageExceptions()])
+      .then(([u, r, l, ex]) => {
         setUsers(u)
         setRegions(r)
         setLocations(l)
+        setExceptions(ex)
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
   }, [])
 
-  const loadScopes = useCallback((authId: string) => {
-    if (!authId) {
-      setScopes([])
+  const selectedUser = users.find((u) => u.auth_user_id === selectedAuthId) ?? null
+
+  const loadAssignments = useCallback((personId: string | null) => {
+    if (!personId) {
+      setAssignments([])
       return
     }
-    fetchScopes(authId)
-      .then(setScopes)
+    fetchAssignments(personId)
+      .then(setAssignments)
       .catch((e: Error) => setError(e.message))
   }, [])
 
   useEffect(() => {
-    loadScopes(selectedAuthId)
-  }, [selectedAuthId, loadScopes])
+    loadAssignments(selectedUser?.person_id ?? null)
+  }, [selectedUser?.person_id, loadAssignments])
+
+  const refreshExceptions = useCallback(() => {
+    fetchCoverageExceptions().then(setExceptions).catch(() => undefined)
+  }, [])
 
   const regionById = useMemo(() => new Map(regions.map((r) => [r.id, r])), [regions])
   const locationById = useMemo(() => new Map(locations.map((l) => [l.id, l])), [locations])
-  const selectedUser = users.find((u) => u.auth_user_id === selectedAuthId) ?? null
+  const locationByCgops = useMemo(() => {
+    const m = new Map<string, CoverageLocation>()
+    for (const l of locations) if (l.cgops_location_id) m.set(l.cgops_location_id, l)
+    return m
+  }, [locations])
   const seesEverything =
     !!selectedUser && (selectedUser.role === 'admin' || selectedUser.can_view_all)
 
@@ -103,19 +118,20 @@ export function CoverageView({ session, profile }: CoverageViewProps) {
         }
       }
     }
-    // Scope grants: whole-region or single-location.
-    for (const s of scopes) {
-      if (s.region_id) {
-        const rname = regionById.get(s.region_id)?.name ?? '?'
+    // Assignment grants: whole-region or single-location (CGOPS id → our row).
+    for (const a of assignments) {
+      if (a.region_id) {
+        const rname = regionById.get(a.region_id)?.name ?? '?'
         for (const l of locations) {
-          if (l.region_id === s.region_id) push(l.id, { kind: 'grant_region', region: rname })
+          if (l.region_id === a.region_id) push(l.id, { kind: 'grant_region', region: rname })
         }
-      } else if (s.location_id) {
-        push(s.location_id, { kind: 'grant_location' })
+      } else if (a.cgops_location_id) {
+        const pc = locationByCgops.get(a.cgops_location_id)
+        if (pc) push(pc.id, { kind: 'grant_location' })
       }
     }
     return map
-  }, [selectedUser, regions, locations, scopes, regionById])
+  }, [selectedUser, regions, locations, assignments, regionById, locationByCgops])
 
   const coveredRows = useMemo(
     () =>
@@ -126,23 +142,35 @@ export function CoverageView({ session, profile }: CoverageViewProps) {
     [coverage, locationById],
   )
 
+  const grantLabel = useCallback(
+    (a: Assignment) =>
+      a.region_id
+        ? `region ${regionById.get(a.region_id)?.name ?? a.region_id}`
+        : `location ${
+            a.cgops_location_id
+              ? locationByCgops.get(a.cgops_location_id)?.name ?? a.cgops_location_id
+              : '?'
+          }`,
+    [regionById, locationByCgops],
+  )
+
   async function handleAdd() {
     if (!selectedUser || !grantId) return
     setBusy(true)
     setError(null)
     try {
-      const label =
-        grantType === 'region'
-          ? `region ${regionById.get(grantId)?.name ?? grantId}`
-          : `location ${locationById.get(grantId)?.name ?? grantId}`
-      await addScope(
-        actor,
-        selectedUser,
-        grantType === 'region' ? { regionId: grantId } : { locationId: grantId },
-        label,
-      )
+      if (grantType === 'region') {
+        await addAssignment(actor, selectedUser, { regionId: grantId }, `region ${regionById.get(grantId)?.name ?? grantId}`)
+      } else {
+        const loc = locationById.get(grantId)
+        if (!loc?.cgops_location_id) {
+          throw new Error('This location is not linked to CGOPS yet, so it cannot be granted.')
+        }
+        await addAssignment(actor, selectedUser, { cgopsLocationId: loc.cgops_location_id }, `location ${loc.name}`)
+      }
       setGrantId('')
-      loadScopes(selectedUser.auth_user_id)
+      loadAssignments(selectedUser.person_id)
+      refreshExceptions()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -150,16 +178,14 @@ export function CoverageView({ session, profile }: CoverageViewProps) {
     }
   }
 
-  async function handleRemove(s: ScopeGrant) {
+  async function handleRemove(a: Assignment) {
     if (!selectedUser) return
     setBusy(true)
     setError(null)
     try {
-      const label = s.region_id
-        ? `region ${regionById.get(s.region_id)?.name ?? s.region_id}`
-        : `location ${locationById.get(s.location_id ?? '')?.name ?? s.location_id}`
-      await removeScope(actor, s.id, selectedUser.email, label)
-      loadScopes(selectedUser.auth_user_id)
+      await removeAssignment(actor, a, selectedUser, grantLabel(a))
+      loadAssignments(selectedUser.person_id)
+      refreshExceptions()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -179,12 +205,40 @@ export function CoverageView({ session, profile }: CoverageViewProps) {
       </h2>
       <p className="mb-4 max-w-2xl text-sm text-charcoal/60">
         See exactly which locations a user can reach and why — their region-derived
-        default (from the region they lead) plus any bespoke grants — and add or
-        remove grants. Replaces the raw-SQL workflow.
+        default (from the region they lead) plus person-keyed assignment grants —
+        and add or remove grants. Coverage follows the person, not the login.
       </p>
 
       {error && (
         <p className="mb-3 rounded-md bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>
+      )}
+
+      {exceptions.length > 0 && (
+        <section className="mb-4 rounded-xl border border-warning/40 bg-warning/5 p-4">
+          <h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-warning">
+            <AlertTriangle className="h-3.5 w-3.5" /> No coverage resolves ({exceptions.length})
+          </h3>
+          <p className="mb-2 text-[11px] text-charcoal/55">
+            Scoping fails closed: these logins see nothing. Click one to fix it — grant coverage
+            below, or link the login to a person in Users first.
+          </p>
+          <ul className="space-y-1">
+            {exceptions.map((ex) => (
+              <li key={ex.email} className="flex flex-wrap items-center gap-2 text-sm">
+                <button
+                  onClick={() => {
+                    const u = users.find((x) => x.email === ex.email)
+                    if (u) setSelectedAuthId(u.auth_user_id)
+                  }}
+                  className="text-charcoal/80 underline-offset-2 hover:text-cg-orange hover:underline"
+                >
+                  {ex.display_name ?? ex.email}
+                </button>
+                <span className="text-xs text-charcoal/50">{ex.reason}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -220,6 +274,13 @@ export function CoverageView({ session, profile }: CoverageViewProps) {
               </span>
             )}
           </div>
+
+          {!selectedUser.person_id && (
+            <p className="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">
+              This login isn't linked to a person record, so person-keyed coverage cannot be
+              granted. Link them to a person in the Users panel first.
+            </p>
+          )}
 
           {seesEverything && (
             <p className="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">
@@ -281,35 +342,40 @@ export function CoverageView({ session, profile }: CoverageViewProps) {
             )}
           </section>
 
-          {/* Scope grants management */}
+          {/* Assignment grants management */}
           <section className="rounded-xl border border-surface-line bg-surface p-4">
             <h3 className="mb-3 text-xs font-medium uppercase tracking-wide text-charcoal/50">
-              Bespoke grants
+              Assignment grants (person-keyed)
             </h3>
-            {scopes.length === 0 ? (
-              <p className="mb-3 text-sm text-charcoal/50">No bespoke grants — coverage is region-derived only.</p>
+            {assignments.length === 0 ? (
+              <p className="mb-3 text-sm text-charcoal/50">No grants — coverage is region-derived only.</p>
             ) : (
               <ul className="mb-3 space-y-1.5">
-                {scopes.map((s) => (
+                {assignments.map((a) => (
                   <li
-                    key={s.id}
+                    key={a.id}
                     className="flex items-center justify-between gap-2 rounded-md border border-surface-line px-3 py-1.5 text-sm"
                   >
                     <span className="flex items-center gap-1.5">
-                      {s.region_id ? (
-                        <>
-                          <MapPin className="h-3.5 w-3.5 text-info" />
-                          Region: {regionById.get(s.region_id)?.name ?? s.region_id}
-                        </>
-                      ) : (
-                        <>
-                          <MapPin className="h-3.5 w-3.5 text-charcoal/50" />
-                          Location: {locationById.get(s.location_id ?? '')?.name ?? s.location_id}
-                        </>
+                      <MapPin className={`h-3.5 w-3.5 ${a.region_id ? 'text-info' : 'text-charcoal/50'}`} />
+                      {a.region_id
+                        ? `Region: ${regionById.get(a.region_id)?.name ?? a.region_id}`
+                        : `Location: ${
+                            a.cgops_location_id
+                              ? locationByCgops.get(a.cgops_location_id)?.name ?? 'CGOPS-only location'
+                              : '?'
+                          }`}
+                      {a.source !== 'manual' && (
+                        <span
+                          title="Migrated from the legacy account-keyed stores (2026-08-29)"
+                          className="rounded-full bg-surface-muted px-1.5 py-0.5 text-[10px] text-charcoal/50"
+                        >
+                          migrated
+                        </span>
                       )}
                     </span>
                     <button
-                      onClick={() => void handleRemove(s)}
+                      onClick={() => void handleRemove(a)}
                       disabled={busy}
                       aria-label="Remove grant"
                       className="rounded p-1 text-charcoal/40 hover:text-danger disabled:opacity-50"
@@ -346,14 +412,15 @@ export function CoverageView({ session, profile }: CoverageViewProps) {
                       </option>
                     ))
                   : locations.map((l) => (
-                      <option key={l.id} value={l.id}>
+                      <option key={l.id} value={l.id} disabled={!l.cgops_location_id}>
                         {l.name}
+                        {!l.cgops_location_id ? ' (not linked to CGOPS yet)' : ''}
                       </option>
                     ))}
               </select>
               <button
                 onClick={() => void handleAdd()}
-                disabled={busy || !grantId}
+                disabled={busy || !grantId || !selectedUser.person_id}
                 className="flex items-center gap-1.5 rounded-md bg-cg-orange px-3 py-1.5 text-sm font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
               >
                 <Plus className="h-4 w-4" /> Add grant

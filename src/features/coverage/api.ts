@@ -1,11 +1,11 @@
-// Covered-locations picker data access. Manages people_center_user_scopes
-// (bespoke coverage grants) and computes each user's EFFECTIVE coverage so an
-// admin/executive can see — and understand the derivation of — why a person
-// can see a given location. RLS is the enforcement layer (scopes are
-// admin/executive-manageable, migration 20260724150000); this module mirrors
-// the same model the database uses (people_center_my_coverage +
-// people_center_covers_location): region-derived default ∪ scope grants, with
-// can_view_all short-circuiting to everything.
+// Covered-locations picker data access. Coverage is owned by People Center
+// and keyed on the PERSON (ruling d98cb0cf: CGOPS owns locations, People
+// Center owns people and location assignments): grants live in
+// people_center_location_assignments (person_id + whole-region OR a single
+// CGOPS locations.id). The legacy account-keyed people_center_user_scopes is
+// read-only history — removals here clean up any matching legacy row so the
+// transitional people_center_my_coverage() (which still honours legacy rows)
+// can never resurrect a revoked grant.
 
 import { supabase } from '../../lib/supabase'
 import { recordAudit, type Actor } from '../../lib/activity'
@@ -32,13 +32,15 @@ export interface CoverageLocation {
   name: string
   status: string | null
   region_id: string | null
+  cgops_location_id: string | null // null = not yet mapped to CGOPS — ungrantable
 }
 
-export interface ScopeGrant {
+export interface Assignment {
   id: string
-  auth_user_id: string
+  person_id: string
   region_id: string | null
-  location_id: string | null
+  cgops_location_id: string | null
+  source: string
 }
 
 export async function fetchScopeUsers(): Promise<ScopeUser[]> {
@@ -62,33 +64,35 @@ export async function fetchRegions(): Promise<Region[]> {
 export async function fetchCoverageLocations(): Promise<CoverageLocation[]> {
   const { data, error } = await supabase
     .from('people_center_locations')
-    .select('id, name, status, region_id')
+    .select('id, name, status, region_id, cgops_location_id')
     .order('name')
   if (error) throw error
   return (data as CoverageLocation[]) ?? []
 }
 
-export async function fetchScopes(authUserId: string): Promise<ScopeGrant[]> {
+export async function fetchAssignments(personId: string): Promise<Assignment[]> {
   const { data, error } = await supabase
-    .from('people_center_user_scopes')
-    .select('id, auth_user_id, region_id, location_id')
-    .eq('auth_user_id', authUserId)
+    .from('people_center_location_assignments')
+    .select('id, person_id, region_id, cgops_location_id, source')
+    .eq('person_id', personId)
   if (error) throw error
-  return (data as ScopeGrant[]) ?? []
+  return (data as Assignment[]) ?? []
 }
 
-export async function addScope(
+export async function addAssignment(
   actor: Actor,
   user: ScopeUser,
-  grant: { regionId?: string; locationId?: string },
+  grant: { regionId?: string; cgopsLocationId?: string },
   label: string,
 ): Promise<void> {
+  if (!user.person_id) throw new Error('This login is not linked to a person yet — link it in Users first.')
   const { data, error } = await supabase
-    .from('people_center_user_scopes')
+    .from('people_center_location_assignments')
     .insert({
-      auth_user_id: user.auth_user_id,
+      person_id: user.person_id,
       region_id: grant.regionId ?? null,
-      location_id: grant.locationId ?? null,
+      cgops_location_id: grant.cgopsLocationId ?? null,
+      source: 'manual',
       updated_by: actor.personId,
       updated_by_name: actor.name,
     })
@@ -97,19 +101,56 @@ export async function addScope(
   if (!data || data.length === 0) {
     throw new Error('The database did not accept this grant (admin/executive only).')
   }
-  await recordAudit(actor, 'create', 'user_scope', data[0].id, user.email, `Granted ${label}`)
+  await recordAudit(actor, 'create', 'location_assignment', data[0].id, user.email, `Granted ${label}`)
 }
 
-export async function removeScope(
+export async function removeAssignment(
   actor: Actor,
-  scopeId: string,
-  userEmail: string,
+  a: Assignment,
+  user: ScopeUser,
   label: string,
 ): Promise<void> {
   const { error } = await supabase
-    .from('people_center_user_scopes')
+    .from('people_center_location_assignments')
     .delete()
-    .eq('id', scopeId)
+    .eq('id', a.id)
   if (error) throw error
-  await recordAudit(actor, 'delete', 'user_scope', scopeId, userEmail, `Removed ${label}`)
+  // Clean up any matching LEGACY account-keyed scope so the transitional
+  // my_coverage() can't re-grant what was just revoked.
+  if (a.region_id) {
+    await supabase
+      .from('people_center_user_scopes')
+      .delete()
+      .eq('auth_user_id', user.auth_user_id)
+      .eq('region_id', a.region_id)
+  } else if (a.cgops_location_id) {
+    const { data: pcLocs } = await supabase
+      .from('people_center_locations')
+      .select('id')
+      .eq('cgops_location_id', a.cgops_location_id)
+    const ids = ((pcLocs as { id: string }[]) ?? []).map((l) => l.id)
+    if (ids.length > 0) {
+      await supabase
+        .from('people_center_user_scopes')
+        .delete()
+        .eq('auth_user_id', user.auth_user_id)
+        .in('location_id', ids)
+    }
+  }
+  await recordAudit(actor, 'delete', 'location_assignment', a.id, user.email, `Removed ${label}`)
+}
+
+export interface CoverageException {
+  email: string
+  display_name: string | null
+  person_id: string | null
+  reason: string
+}
+
+/** Fail-closed, made visible: logins that resolve to NO coverage (or aren't
+ * linked to a person). Admin/executive callers only — others get zero rows. */
+export async function fetchCoverageExceptions(): Promise<CoverageException[]> {
+  const { data, error } = await supabase.rpc('people_center_coverage_exceptions')
+  if (error) throw error
+  return (data as CoverageException[]) ?? []
 }
