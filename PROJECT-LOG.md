@@ -1,5 +1,12 @@
 # Project Log
 
+## [2026-08-29] Michael's stray BTW grant removed; coverage ruling filed as formal decision
+**Shipped:** Two closing acts on today's coverage work, both at Michael's direction. (1) Removed his stray Beertown Waterloo grant — one row from the person-keyed store AND the matching legacy user_scopes row (so nothing can resurrect it); verified his person now carries zero grants (his admin login sees everything by role); audited. (2) Filed the coverage-semantics ruling as a formal DECISION artifact on the bus (c3758d53, artifact_type='decision', project CG Portfolio, re-read by id): coverage = auto-filled default filter adjustable in settings; My Locations off = all locations, ROLs included; admin/view-all bypasses the prefill; fail-closed remains for genuine access decisions. The decision records the day's companion rulings (Darryl = all Beertown + Sociable; HQ = role attribute, not coverage) and links the standard (d98cb0cf) and the CGOPS work order (4ab5a4b0).
+**Roadmap:** Coverage governance is now fully written down: standard → decision → work order → implementation evidence, all on the bus.
+**Decisions:** captured in artifact c3758d53 (see above) — none new beyond it.
+**Blockers:** none.
+**Next:** CGOPS implements 4ab5a4b0; People Center side idle on this thread.
+
 ## [2026-08-29] Diagnosed CGOPS filter confusion; filed Michael's coverage-semantics ruling
 **Shipped:** Analysis + routing only (no People Center changes). Michael's Daily Recaps page was hard-scoped to "Beertown Waterloo" while his CGOPS "My Locations" preference held only Whitby. Verified the cause in data: his PERSON carries a Beertown Waterloo coverage grant (July test residue, present in legacy user_scopes and the migrated store) → people_center_my_coverage() returns {Beertown Waterloo} → CGOPS treats coverage as the hard scope, ignoring both his admin role and the separate CGOPS preference list. Two unrelated "my locations" concepts collide by name. Michael ruled the fix: coverage = the auto-filled DEFAULT of each user's location filter (adjustable in settings); toggling My Locations OFF shows ALL locations — for ROLs too; coverage is not a visibility wall in operational views. Filed as a CGOPS work order on the bus (artifact 4ab5a4b0, kind=prompt, project CGOPS Platform, re-read by id), referencing resolve_my_locations() as the prefill source and noting admin/can_view_all should bypass the prefill.
 **Roadmap:** People Center unchanged — store/resolver/exceptions already conform; this ruling governs CGOPS's consumption step.
