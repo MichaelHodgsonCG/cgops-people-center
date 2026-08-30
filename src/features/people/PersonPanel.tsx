@@ -291,13 +291,19 @@ export function PersonPanel({ personId, session, profile, onClose, onChanged }: 
                 renders nothing when RLS returns no assessments */}
             <DevelopmentPathSection personId={person.id} />
 
-            {/* Quarterly development goals (F27) — UTL tasks; editors are HQ
-                + the subject's chain (mirrors the goals RLS) */}
+            {/* Quarterly development goals (F27) — UTL tasks; editors are HQ,
+                the subject's chain, and the person THEMSELF on their own
+                profile (mirrors the goals RLS — the F27 sheets are written
+                in the first person, GM checks in) */}
             <QuarterlyGoalsSection
               personId={person.id}
               personName={person.full_name}
               actor={actor}
-              canEdit={isHqAltitude || (managerRole && viewerIsAbove)}
+              canEdit={
+                isHqAltitude ||
+                (managerRole && viewerIsAbove) ||
+                (!!user?.personId && user.personId === person.id)
+              }
             />
 
             {/* Notes */}
