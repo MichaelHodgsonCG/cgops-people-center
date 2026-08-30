@@ -44,7 +44,7 @@ import {
   fetchRelationshipNotes,
   fetchRestrictedNotes,
   fetchViewerIsAbove,
-  reassignPrimary,
+  seatOrSlatePerson,
   setManager,
   updatePersonProfile,
   type PersonDetail,
@@ -470,7 +470,7 @@ function FactBlock({ label, value }: { label: string; value: string | null }) {
 }
 
 // Quick "Add to seat" beside the note composer (executive/admin): the person
-// is pre-loaded — pick role + location and reassignPrimary does the rest
+// is pre-loaded — pick role + location and seatOrSlatePerson does the rest
 // (current primary ended today, history kept, audited + timeline event).
 // Same semantics as the Edit form's assignment change and the Visit-view
 // add-to-seat; this is just the one-click path from the cheat sheet.
@@ -508,17 +508,25 @@ function SeatComposer({
     setSaving(true)
     setError(null)
     try {
-      await reassignPrimary(actor, person, pos.id, loc.id, pos.name, loc.name)
+      const outcome = await seatOrSlatePerson(actor, person, pos.id, loc.id, pos.name, loc.name)
       setOpen(false)
       setPositionId('')
       setLocationId('')
-      onSaved(`Seat updated — ${person.full_name} is now ${pos.name} at ${loc.name}.`)
+      onSaved(
+        outcome === 'seated'
+          ? `Seat updated — ${person.full_name} is now ${pos.name} at ${loc.name}.`
+          : outcome === 'slated'
+            ? `${person.full_name} slated as ${pos.name} at ${loc.name} (opening site) — current seat unchanged; the plan shows in Bench & Upcoming.`
+            : `${person.full_name} is already slated as ${pos.name} at ${loc.name} — nothing changed.`,
+      )
     } catch (e) {
       setError(errText(e))
     } finally {
       setSaving(false)
     }
   }
+
+  const targetOpening = refs?.locations.find((l) => l.id === locationId)?.status === 'opening'
 
   if (!open) {
     return (
@@ -561,11 +569,13 @@ function SeatComposer({
         </select>
       </div>
       <p className="text-[11px] text-charcoal/60">
-        {current
-          ? `Current seat: ${current.positions?.name ?? '?'}${
-              current.locations?.name ? ` — ${current.locations.name}` : ''
-            } — it is ended today when this is saved (history kept).`
-          : 'No current seat — this becomes their primary seat.'}
+        {targetOpening
+          ? 'Opening site — saving SLATES them (a Bench plan). Their current seat is unchanged until the site opens, and the planned org shows the move.'
+          : current
+            ? `Current seat: ${current.positions?.name ?? '?'}${
+                current.locations?.name ? ` — ${current.locations.name}` : ''
+              } — it is ended today when this is saved (history kept).`
+            : 'No current seat — this becomes their primary seat.'}
       </p>
       {error && <p className="text-xs text-danger">{error}</p>}
       <div className="flex gap-2">
@@ -920,7 +930,9 @@ function AdminEditor({
         (positionId !== currentPrimary?.position_id ||
           locationId !== currentPrimary?.location_id)
       if (positionChanged && options) {
-        await reassignPrimary(
+        // Same lifecycle-aware path as the quick add-to-seat: an opening
+        // site slates (Bench plan) instead of prematurely moving the seat.
+        await seatOrSlatePerson(
           actor,
           person,
           positionId,

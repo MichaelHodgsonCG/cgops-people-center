@@ -6,6 +6,7 @@
 
 import { supabase } from '../../lib/supabase'
 import { recordAudit, recordEvent, type Actor } from '../../lib/activity'
+import { createSlot } from '../bench/api'
 import type { Note, NoteCategory, NoteVisibility } from '../../types'
 
 // Is `viewer` strictly above `subject` in the reporting chain? Mirrors the
@@ -380,6 +381,7 @@ export async function purgeRelationshipNotes(personId: string): Promise<number> 
 export interface ReferenceOption {
   id: string
   name: string
+  status?: string | null // locations only: 'open' | 'opening' | 'closed'
 }
 
 export async function fetchReferenceOptions(): Promise<{
@@ -394,7 +396,7 @@ export async function fetchReferenceOptions(): Promise<{
       .select('id, name')
       .eq('show_in_people_center', true)
       .order('name'),
-    supabase.from('people_center_locations').select('id, name').order('name'),
+    supabase.from('people_center_locations').select('id, name, status').order('name'),
   ])
   if (pos.error) throw pos.error
   if (loc.error) throw loc.error
@@ -402,6 +404,47 @@ export async function fetchReferenceOptions(): Promise<{
     positions: (pos.data as ReferenceOption[]) ?? [],
     locations: (loc.data as ReferenceOption[]) ?? [],
   }
+}
+
+/** Seat a person the RIGHT way for the target location's lifecycle:
+ *  - OPEN site  → move their primary seat there (reassignPrimary — the old
+ *    seat is ended today, history kept).
+ *  - OPENING site → SLATE them in the Bench instead (succession slot). They
+ *    are planned for the seat but keep their current seat until the site
+ *    opens — so the Planned org shows the "moving from" knock-on vacancy
+ *    rather than silently vacating their real seat months early. (Lesson
+ *    from DeMar Lewis, 2026-08-30: add-to-seat at Peterborough moved his
+ *    primary and hid the move.)
+ * Returns which path ran so the UI can phrase the confirmation honestly. */
+export async function seatOrSlatePerson(
+  actor: Actor,
+  person: PersonDetail,
+  positionId: string,
+  locationId: string,
+  positionName: string,
+  locationName: string,
+): Promise<'seated' | 'slated' | 'already_slated'> {
+  const { data: loc, error: locErr } = await supabase
+    .from('people_center_locations')
+    .select('status')
+    .eq('id', locationId)
+    .maybeSingle()
+  if (locErr) throw locErr
+  if ((loc?.status ?? '') === 'opening') {
+    const { data: existing, error: exErr } = await supabase
+      .from('people_center_succession_slots')
+      .select('id')
+      .eq('location_id', locationId)
+      .eq('position_id', positionId)
+      .eq('incumbent_person_id', person.id)
+      .limit(1)
+    if (exErr) throw exErr
+    if (existing && existing.length > 0) return 'already_slated'
+    await createSlot(actor, positionId, locationId, null, person.id, `${positionName} — ${locationName}`)
+    return 'slated'
+  }
+  await reassignPrimary(actor, person, positionId, locationId, positionName, locationName)
+  return 'seated'
 }
 
 /** End the current primary assignment (history preserved) and set a new one. */

@@ -13,7 +13,7 @@ import { PersonPicker, type PickedPerson } from '../../components/PersonPicker'
 import {
   fetchPersonDetail,
   fetchReferenceOptions,
-  reassignPrimary,
+  seatOrSlatePerson,
   type ReferenceOption,
 } from '../people/api'
 import { actorFrom } from '../../lib/activity'
@@ -100,6 +100,7 @@ export function VisitView({ session, profile }: VisitViewProps) {
   const [roleId, setRoleId] = useState('')
   const [addSaving, setAddSaving] = useState(false)
   const [addErr, setAddErr] = useState<string | null>(null)
+  const [addNotice, setAddNotice] = useState<string | null>(null)
 
   useEffect(() => {
     if (!adding || refs !== null) return
@@ -190,12 +191,20 @@ export function VisitView({ session, profile }: VisitViewProps) {
     }
     setAddSaving(true)
     setAddErr(null)
+    setAddNotice(null)
     try {
       const detail = await fetchPersonDetail(pickPerson.personId)
-      await reassignPrimary(actor, detail, pos.id, locId, pos.name, location)
+      const outcome = await seatOrSlatePerson(actor, detail, pos.id, locId, pos.name, location)
       setAdding(false)
       setPickPerson({ name: '', personId: null })
       setRoleId('')
+      if (outcome === 'slated') {
+        setAddNotice(
+          `${detail.full_name} slated as ${pos.name} here (opening site) — their current seat is unchanged; see the plan in Bench & Upcoming.`,
+        )
+      } else if (outcome === 'already_slated') {
+        setAddNotice(`${detail.full_name} is already slated as ${pos.name} here — nothing changed.`)
+      }
       load()
     } catch (e) {
       setAddErr(errText(e))
@@ -238,6 +247,10 @@ export function VisitView({ session, profile }: VisitViewProps) {
             </button>
           )}
         </div>
+
+        {addNotice && (
+          <p className="mb-3 rounded-md bg-success/10 px-3 py-2 text-sm text-success">{addNotice}</p>
+        )}
 
         {canEdit && adding && (
           <div className="mb-3 rounded-xl border border-cg-orange/40 bg-cg-orange-soft/30 p-3.5">
