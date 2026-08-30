@@ -1,5 +1,12 @@
 # Project Log
 
+## [2026-08-30] Quarterly goals: people can author their own
+**Shipped:** Michael asked whether people can add their own quarterly goals — they couldn't (writes were HQ + reporting chain only; the person could merely see theirs). Enabled it: RLS write policy widened with owner-self write (migration 20260830120000, applied live), and the person panel's goals section is now editable when viewing your own profile. Matches the F27 sheets' first-person design (the person drafts, the GM checks in). Coaches (support) remain read-only on rows they don't own; chain/HQ editing unchanged; My Day/My Tasks unchanged (they already showed own goals).
+**Roadmap:** Quarterly goals now cover the full F27 authorship model: self, coach visibility, chain/HQ management.
+**Decisions:** Self-write is full parity on OWN rows (create/edit/status incl. marking done) — a person closing their own development goal is legitimate; the GM check-in fields remain the manager's verification trail.
+**Blockers:** none.
+**Next:** none queued.
+
 ## [2026-08-30] DeMar corrected; seat flows now slate at opening sites
 **Shipped:** Michael spotted that DeMar Lewis (a Chef de Partie stepping up) showed in Peterborough's planned org with no "moving from" chip. Root cause: the add-to-seat flow had MOVED his primary seat to the opening site — ending his real Whitby CDP seat months early and making Peterborough his "current" location, so there was no move to flag. Data corrected: erroneous Peterborough assignment deleted, Whitby CDP seat restored (ended_on cleared), and discovered Camilla had ALREADY slated him as Peterborough Sous in July — that Bench slot stands (my corrective duplicate removed). The modal now shows "DeMar Lewis — moving from Beertown Whitby" like the others, and Whitby's backfill math sees him as a mover. Prevention shipped: new seatOrSlatePerson() makes every seat flow lifecycle-aware — OPEN site → move primary (as before); OPENING site → create a Bench succession slot (already-slated check included), current seat untouched. Wired through Visit add-to-seat, the person panel quick Add-to-seat (live hint when an opening site is picked), and the full Edit form's assignment change; confirmations say which path ran. Build passes; merged to main.
 **Roadmap:** One write-path philosophy extended: seat placement now routes by location lifecycle everywhere.
