@@ -9,6 +9,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   BarChart3,
+  Inbox,
   ClipboardList,
   Database,
   HelpCircle,
@@ -43,6 +44,7 @@ export type View =
   | 'coverage'
   | 'users'
   | 'activity'
+  | 'hiring'
 
 const NAV: { view: View; label: string; resource: Resource; icon: LucideIcon }[] = [
   { view: 'directory', label: 'Directory', resource: 'directory', icon: Users },
@@ -52,6 +54,7 @@ const NAV: { view: View; label: string; resource: Resource; icon: LucideIcon }[]
   { view: 'gaps', label: 'Gap Analysis', resource: 'gap_analysis', icon: ClipboardList },
   { view: 'my_tasks', label: 'My Tasks', resource: 'my_tasks', icon: ListTodo },
   { view: 'bench', label: 'Bench & Risk', resource: 'bench', icon: BarChart3 },
+  { view: 'hiring', label: 'Hiring', resource: 'hiring', icon: Inbox },
   { view: 'data_sources', label: 'Data Sources', resource: 'data_sources', icon: Database },
   { view: 'coverage', label: 'Covered locations', resource: 'user_scopes', icon: Map },
   { view: 'users', label: 'Users', resource: 'admin_area', icon: UserCog },

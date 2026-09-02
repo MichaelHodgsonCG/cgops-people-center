@@ -33,6 +33,7 @@ export type Resource =
   | 'restricted_notes' // restricted-visibility notes (audited read)
   | 'user_scopes' // Covered-locations picker: manage bespoke coverage grants (HQ)
   | 'my_tasks' // gap seats assigned to me (owner/support) — every signed-in role
+  | 'hiring' // TM applications: HQ + manager roles open the view (RLS scopes rows)
 
 export interface PermissionUser {
   role: AppRole
@@ -80,6 +81,14 @@ export function can(
       // Covered-locations picker — HQ altitude only (mirrors the widened
       // people_center_user_scopes RLS: admin + executive manage grants).
       return user.role === 'executive'
+    case 'hiring':
+      // View: HQ plus the manager roles that can be configured as per-position
+      // reviewers (a GM is usually a location_leader) — RLS returns only the
+      // applications they actually review, so the wider gate leaks nothing.
+      // Update (= reviewer settings): executive/admin, like other config.
+      if (action === 'view')
+        return ['executive', 'regional_leader', 'location_leader'].includes(user.role)
+      return action === 'update' && user.role === 'executive'
     case 'my_tasks':
       // Every signed-in role: the RLS on people_center_gap_assignments already
       // scopes non-HQ roles to their OWN rows (owner/support), so the view is
