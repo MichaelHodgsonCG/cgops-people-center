@@ -289,6 +289,84 @@ export async function saveJobDescription(
   )
 }
 
+// --- Uniform & grooming standards --------------------------------------------
+// The second document of the acknowledgement pair (acks doc='uniform_grooming').
+// Per BRAND + audience (FOH/BOH) — these differ by restaurant brand, unlike
+// job descriptions. Same read/write shape as job descriptions.
+
+export interface UniformStandard {
+  id: string
+  brand: string
+  audience: string
+  title: string
+  body: string
+  source_file: string
+  effective: string
+  version: number
+  active: boolean
+  updated_at: string
+  updated_by_name: string | null
+}
+
+export interface UniformStandardEdits {
+  brand: string
+  audience: string
+  title: string
+  body: string
+  effective: string
+}
+
+export async function fetchUniformStandards(): Promise<UniformStandard[]> {
+  const { data, error } = await supabase
+    .from('people_center_uniform_standards')
+    .select('id, brand, audience, title, body, source_file, effective, version, active, updated_at, updated_by_name')
+    .order('brand')
+    .order('audience')
+  if (error) throw error
+  return (data as UniformStandard[]) ?? []
+}
+
+export async function saveUniformStandard(
+  actor: Actor,
+  existing: UniformStandard | null,
+  edits: UniformStandardEdits,
+): Promise<void> {
+  if (existing) {
+    const { data, error } = await supabase
+      .from('people_center_uniform_standards')
+      .update({
+        ...edits,
+        version: existing.version + 1,
+        updated_at: new Date().toISOString(),
+        updated_by: actor.personId,
+        updated_by_name: actor.name,
+      })
+      .eq('id', existing.id)
+      .select('id')
+    if (error) throw error
+    if (!data || data.length === 0) {
+      throw new Error('The database did not accept this change — editing is executive/admin only.')
+    }
+  } else {
+    const { error } = await supabase.from('people_center_uniform_standards').insert({
+      ...edits,
+      updated_by: actor.personId,
+      updated_by_name: actor.name,
+    })
+    if (error) throw error
+  }
+  await recordAudit(
+    actor,
+    existing ? 'update' : 'create',
+    'uniform_standard',
+    existing?.id ?? edits.title,
+    edits.title,
+    existing
+      ? `Uniform standard "${edits.title}" (${edits.brand}) updated (v${existing.version + 1})`
+      : `Uniform standard "${edits.title}" (${edits.brand}) added`,
+  )
+}
+
 // --- Patterned interviews ----------------------------------------------------
 // The 2026 BOH/FOH hourly patterned interview instruments: structured
 // templates (each creditable answer = 1 point, per-role pass thresholds),
