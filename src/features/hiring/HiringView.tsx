@@ -1,12 +1,15 @@
-// Hiring (Team Member flow, Phase 1) — the screening queue over the record
-// the public intake writes. Admin/executive see everything; a configured
-// reviewer sees the applications for their positions (RLS enforced — this
-// view renders whatever comes back). Prior applications by the same human
-// are SURFACED to the manager, never acted on automatically.
+// Hiring section pages (Team Member flow, Phase 1). Hiring is its own
+// section of the app with its own left menu (HiringShell); this file holds
+// its pages: ApplicationsView — the screening queue over the record the
+// public intake writes — and ReviewersView — per-position reviewer config.
+// Admin/executive see everything; a configured reviewer sees the
+// applications for their positions (RLS enforced — this view renders
+// whatever comes back). Prior applications by the same human are SURFACED
+// to the manager, never acted on automatically.
 
 import { useEffect, useMemo, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import { FileText, Inbox, Settings2 } from 'lucide-react'
+import { FileText, Inbox, UserCog } from 'lucide-react'
 import { actorFrom } from '../../lib/activity'
 import { errText } from '../../lib/errText'
 import { can, toPermissionUser } from '../../permissions'
@@ -46,23 +49,21 @@ const STATUS_CLASS: Record<string, string> = {
 const fmt = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' })
 
-interface HiringViewProps {
+interface HiringPageProps {
   session: Session
   profile: UserProfile | null
 }
 
-export function HiringView({ session, profile }: HiringViewProps) {
+export function ApplicationsView({ session, profile }: HiringPageProps) {
   const actor = actorFrom(profile, session)
   const user = profile ? toPermissionUser(profile) : null
   const isHq = user?.role === 'admin' || user?.role === 'executive'
-  const canConfigure = can(user, 'update', 'hiring')
 
   const [apps, setApps] = useState<ApplicationRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState('open')
   const [selected, setSelected] = useState<ApplicationRow | null>(null)
-  const [showSettings, setShowSettings] = useState(false)
 
   const load = () => {
     fetchApplications()
@@ -83,29 +84,17 @@ export function HiringView({ session, profile }: HiringViewProps) {
 
   return (
     <div className="mx-auto w-full max-w-4xl p-4 sm:p-6">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <h2 className="flex items-center gap-2 text-lg font-semibold">
-            <Inbox className="h-5 w-5 text-cg-orange" /> Hiring — Team Member applications
-          </h2>
-          <p className="mt-1 text-sm text-charcoal/60">
-            The digital application record: every submission, its acknowledgements, and its stage
-            history. Retention runs from date of submission.
-          </p>
-        </div>
-        {canConfigure && (
-          <button
-            onClick={() => setShowSettings((v) => !v)}
-            className="flex items-center gap-1.5 rounded-md border border-surface-line px-2.5 py-1.5 text-xs font-medium hover:bg-surface-muted"
-          >
-            <Settings2 className="h-3.5 w-3.5" /> Reviewers
-          </button>
-        )}
+      <div className="mb-4">
+        <h2 className="flex items-center gap-2 text-lg font-semibold">
+          <Inbox className="h-5 w-5 text-cg-orange" /> Team Member applications
+        </h2>
+        <p className="mt-1 text-sm text-charcoal/60">
+          The digital application record: every submission, its acknowledgements, and its stage
+          history. Retention runs from date of submission.
+        </p>
       </div>
 
       {error && <p className="mb-3 rounded-md bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>}
-
-      {showSettings && canConfigure && <ReviewerSettings actor={actor} onClose={() => setShowSettings(false)} />}
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <label className="text-xs uppercase tracking-wide text-charcoal/50">Show</label>
@@ -352,7 +341,11 @@ function ApplicationPanel({
   )
 }
 
-function ReviewerSettings({ actor, onClose }: { actor: ReturnType<typeof actorFrom>; onClose: () => void }) {
+export function ReviewersView({ session, profile }: HiringPageProps) {
+  const actor = actorFrom(profile, session)
+  const user = profile ? toPermissionUser(profile) : null
+  const canConfigure = can(user, 'update', 'hiring')
+
   const [positions, setPositions] = useState<HiringPosition[]>([])
   const [reviewers, setReviewers] = useState<HiringReviewer[]>([])
   const [people, setPeople] = useState<PersonOption[]>([])
@@ -403,62 +396,75 @@ function ReviewerSettings({ actor, onClose }: { actor: ReturnType<typeof actorFr
     }
   }
 
-  return (
-    <div className="mb-4 rounded-xl border border-cg-orange/40 bg-cg-orange-soft/30 p-4">
-      <div className="mb-2 flex items-center justify-between">
-        <p className="text-xs font-medium uppercase tracking-wide text-charcoal/50">
-          Hiring reviewers — who reviews applications, per position
-        </p>
-        <button onClick={onClose} className="text-xs font-medium text-charcoal/50 hover:text-charcoal">
-          Done
-        </button>
-      </div>
-      <p className="mb-2 text-[11px] text-charcoal/55">
-        The reviewer sees and works that position's applications. Admin/executive always see everything.
+  if (!canConfigure) {
+    return (
+      <p className="p-6 text-sm text-charcoal/55">
+        Reviewer configuration is limited to executives and admins.
       </p>
-      {reviewers.length > 0 && (
-        <ul className="mb-2 space-y-1">
-          {reviewers.map((r) => (
-            <li key={r.position_id} className="flex items-center justify-between gap-2 rounded-md border border-surface-line bg-surface px-3 py-1.5 text-sm">
-              <span>
-                {posById.get(r.position_id) ?? r.position_id} → <span className="font-medium">{r.reviewer_name ?? '?'}</span>
-              </span>
-              <button
-                onClick={() => void clear(r)}
-                disabled={busy}
-                className="text-xs font-medium text-charcoal/40 hover:text-danger disabled:opacity-50"
-              >
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      <div className="flex flex-wrap items-center gap-2">
-        <select
-          value={positionId}
-          onChange={(e) => setPositionId(e.target.value)}
-          className="min-w-48 rounded-md border border-surface-line bg-surface px-2 py-1.5 text-sm"
-        >
-          <option value="">— position —</option>
-          {positions.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-        <div className="min-w-56">
-          <PersonPicker people={people} value={reviewer} onChange={setReviewer} placeholder="Reviewer…" />
-        </div>
-        <button
-          onClick={() => void save()}
-          disabled={busy || !positionId || !reviewer.personId}
-          className="rounded-md bg-cg-orange px-3 py-1.5 text-sm font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
-        >
-          Set reviewer
-        </button>
+    )
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-4xl p-4 sm:p-6">
+      <div className="mb-4">
+        <h2 className="flex items-center gap-2 text-lg font-semibold">
+          <UserCog className="h-5 w-5 text-cg-orange" /> Reviewers
+        </h2>
+        <p className="mt-1 text-sm text-charcoal/60">
+          Who reviews applications, per position. The reviewer sees and works that position's
+          applications; admin/executive always see everything.
+        </p>
       </div>
-      {err && <p className="mt-2 text-xs text-danger">{err}</p>}
+
+      <div className="rounded-xl border border-surface-line bg-surface p-4">
+        {reviewers.length > 0 ? (
+          <ul className="mb-3 space-y-1">
+            {reviewers.map((r) => (
+              <li key={r.position_id} className="flex items-center justify-between gap-2 rounded-md border border-surface-line bg-surface px-3 py-1.5 text-sm">
+                <span>
+                  {posById.get(r.position_id) ?? r.position_id} → <span className="font-medium">{r.reviewer_name ?? '?'}</span>
+                </span>
+                <button
+                  onClick={() => void clear(r)}
+                  disabled={busy}
+                  className="text-xs font-medium text-charcoal/40 hover:text-danger disabled:opacity-50"
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mb-3 text-sm text-charcoal/55">
+            No reviewers configured yet — until then only admin/executive see applications.
+          </p>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={positionId}
+            onChange={(e) => setPositionId(e.target.value)}
+            className="min-w-48 rounded-md border border-surface-line bg-surface px-2 py-1.5 text-sm"
+          >
+            <option value="">— position —</option>
+            {positions.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <div className="min-w-56">
+            <PersonPicker people={people} value={reviewer} onChange={setReviewer} placeholder="Reviewer…" />
+          </div>
+          <button
+            onClick={() => void save()}
+            disabled={busy || !positionId || !reviewer.personId}
+            className="rounded-md bg-cg-orange px-3 py-1.5 text-sm font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
+          >
+            Set reviewer
+          </button>
+        </div>
+        {err && <p className="mt-2 text-xs text-danger">{err}</p>}
+      </div>
     </div>
   )
 }

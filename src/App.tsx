@@ -5,7 +5,7 @@ import { AppShell, type View } from './components/AppShell'
 import { SessionTimeoutManager } from './components/SessionTimeoutManager'
 import { UsersView } from './features/admin/UsersView'
 import { ActivityLogView } from './features/activity/ActivityLogView'
-import { HiringView } from './features/hiring/HiringView'
+import { HiringShell } from './features/hiring/HiringShell'
 import { DirectoryView } from './features/directory/DirectoryView'
 import { VisitView } from './features/visit/VisitView'
 import { OrgChartView } from './features/org/OrgChartView'
@@ -64,6 +64,22 @@ export default function App() {
     (view === 'hiring' && !can(user, 'view', 'hiring'))
   const effectiveView: View = guarded ? 'directory' : view
 
+  // Hiring is its own section: it swaps the whole shell (own left menu with a
+  // "Return to People Center" exit) rather than rendering inside AppShell.
+  if (effectiveView === 'hiring') {
+    return (
+      <>
+        <SessionTimeoutManager />
+        <HiringShell
+          session={session}
+          profile={profile}
+          profileError={profileError}
+          onReturn={() => setView('directory')}
+        />
+      </>
+    )
+  }
+
   return (
     <>
       {/* Platform inactivity timeout (CGOPS authority — Platform Security.md):
@@ -85,8 +101,6 @@ export default function App() {
         <UsersView session={session} profile={profile} />
       ) : effectiveView === 'activity' ? (
         <ActivityLogView session={session} profile={profile} />
-      ) : effectiveView === 'hiring' ? (
-        <HiringView session={session} profile={profile} />
       ) : effectiveView === 'visit' ? (
         <VisitView session={session} profile={profile} />
       ) : effectiveView === 'org_chart' ? (

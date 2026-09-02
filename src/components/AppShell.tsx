@@ -174,7 +174,9 @@ export function AppShell({
 // User menu with the role indicator: shows exactly what the app resolved
 // from people_center_user_profiles (or why it resolved nothing), so
 // role/permission issues are diagnosable from the UI instead of guesswork.
-function UserMenu({
+// Exported: the Hiring section's shell (HiringShell) reuses it so the user
+// chrome is identical in both shells.
+export function UserMenu({
   session,
   profile,
   profileError,
