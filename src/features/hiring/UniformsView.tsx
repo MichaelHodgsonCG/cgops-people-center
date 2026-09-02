@@ -245,6 +245,7 @@ function StandardForm({
         >
           <option value="FOH">FOH</option>
           <option value="BOH">BOH</option>
+          <option value="Management">Management</option>
           <option value="">All / whole house</option>
         </select>
         <input
