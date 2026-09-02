@@ -215,6 +215,80 @@ export async function setHiringReviewer(
   )
 }
 
+// --- Job descriptions --------------------------------------------------------
+// The documents applicants acknowledge (acks doc='job_description'), stored
+// digitally per role title and editable by executive/admin (RLS enforced).
+
+export interface JobDescription {
+  id: string
+  role_title: string
+  department: string
+  reports_to: string
+  body: string
+  source_file: string
+  version: number
+  active: boolean
+  updated_at: string
+  updated_by_name: string | null
+}
+
+export async function fetchJobDescriptions(): Promise<JobDescription[]> {
+  const { data, error } = await supabase
+    .from('people_center_job_descriptions')
+    .select('id, role_title, department, reports_to, body, source_file, version, active, updated_at, updated_by_name')
+    .order('role_title')
+  if (error) throw error
+  return (data as JobDescription[]) ?? []
+}
+
+export interface JobDescriptionEdits {
+  role_title: string
+  department: string
+  reports_to: string
+  body: string
+}
+
+export async function saveJobDescription(
+  actor: Actor,
+  existing: JobDescription | null,
+  edits: JobDescriptionEdits,
+): Promise<void> {
+  if (existing) {
+    const { data, error } = await supabase
+      .from('people_center_job_descriptions')
+      .update({
+        ...edits,
+        version: existing.version + 1,
+        updated_at: new Date().toISOString(),
+        updated_by: actor.personId,
+        updated_by_name: actor.name,
+      })
+      .eq('id', existing.id)
+      .select('id')
+    if (error) throw error
+    if (!data || data.length === 0) {
+      throw new Error('The database did not accept this change — editing is executive/admin only.')
+    }
+  } else {
+    const { error } = await supabase.from('people_center_job_descriptions').insert({
+      ...edits,
+      updated_by: actor.personId,
+      updated_by_name: actor.name,
+    })
+    if (error) throw error
+  }
+  await recordAudit(
+    actor,
+    existing ? 'update' : 'create',
+    'job_description',
+    existing?.id ?? edits.role_title,
+    edits.role_title,
+    existing
+      ? `Job description for ${edits.role_title} updated (v${existing.version + 1})`
+      : `Job description for ${edits.role_title} added`,
+  )
+}
+
 export interface HiringPosition {
   id: string
   name: string

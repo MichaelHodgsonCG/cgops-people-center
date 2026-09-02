@@ -10,6 +10,7 @@ import { useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import {
   ArrowLeft,
+  BookOpenText,
   ChevronsLeft,
   ChevronsRight,
   HelpCircle,
@@ -24,11 +25,13 @@ import { FeedbackWidget } from '../../components/FeedbackWidget'
 import { HelpPanel } from '../help/HelpPanel'
 import monogram from '../../assets/CG Logo Small.png'
 import { ApplicationsView, ReviewersView } from './HiringView'
+import { JobDescriptionsView } from './JobDescriptionsView'
 
-type HiringPage = 'applications' | 'reviewers'
+type HiringPage = 'applications' | 'job_descriptions' | 'reviewers'
 
 const NAV: { page: HiringPage; label: string; icon: LucideIcon; configureOnly?: boolean }[] = [
   { page: 'applications', label: 'Applications', icon: Inbox },
+  { page: 'job_descriptions', label: 'Job Descriptions', icon: BookOpenText },
   { page: 'reviewers', label: 'Reviewers', icon: UserCog, configureOnly: true },
 ]
 
@@ -135,6 +138,8 @@ export function HiringShell({ session, profile, profileError, onReturn }: Hiring
         <main className="flex-1 bg-surface">
           {page === 'reviewers' ? (
             <ReviewersView session={session} profile={profile} />
+          ) : page === 'job_descriptions' ? (
+            <JobDescriptionsView session={session} profile={profile} />
           ) : (
             <ApplicationsView session={session} profile={profile} />
           )}
