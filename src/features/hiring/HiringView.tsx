@@ -14,6 +14,7 @@ import { actorFrom } from '../../lib/activity'
 import { errText } from '../../lib/errText'
 import { can, toPermissionUser } from '../../permissions'
 import { PersonPicker, type PickedPerson } from '../../components/PersonPicker'
+import { InterviewSection } from './InterviewSection'
 import { fetchPeopleOptions, type PersonOption } from '../bench/api'
 import type { UserProfile } from '../../types'
 import {
@@ -287,6 +288,8 @@ function ApplicationPanel({
           )}
         </section>
 
+        <InterviewSection app={app} actor={actor} />
+
         <section className="mb-3 rounded-xl border border-surface-line p-3">
           <h4 className="mb-2 text-xs font-medium uppercase tracking-wide text-charcoal/50">Move stage</h4>
           <div className="flex flex-wrap items-center gap-2">
@@ -316,8 +319,8 @@ function ApplicationPanel({
             </button>
           </div>
           <p className="mt-2 text-[11px] text-charcoal/50">
-            Interview scoring, reference checks, and the one-week decision-communication clock arrive in
-            Phase 2 — for now every move is recorded in the history below.
+            Reference checks and the one-week decision-communication clock arrive later in Phase 2 —
+            every move is recorded in the history below.
           </p>
           {err && <p className="mt-1 text-xs text-danger">{err}</p>}
         </section>

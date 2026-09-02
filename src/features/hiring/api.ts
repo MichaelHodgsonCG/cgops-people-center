@@ -289,6 +289,195 @@ export async function saveJobDescription(
   )
 }
 
+// --- Patterned interviews ----------------------------------------------------
+// The 2026 BOH/FOH hourly patterned interview instruments: structured
+// templates (each creditable answer = 1 point, per-role pass thresholds),
+// editable by executive/admin; managers record scored interviews against an
+// application. A recorded interview SNAPSHOTS the template so the record
+// stays exactly what the interviewer saw, even after the template is edited.
+
+export interface InterviewQuestion {
+  prompt: string
+  answers: string[]
+}
+
+export interface InterviewThreshold {
+  label: string
+  min: number
+}
+
+export interface InterviewTemplate {
+  id: string
+  name: string
+  audience: string
+  intro: string
+  questions: InterviewQuestion[]
+  thresholds: InterviewThreshold[]
+  source_file: string
+  version: number
+  active: boolean
+  updated_at: string
+  updated_by_name: string | null
+}
+
+export interface InterviewTemplateEdits {
+  name: string
+  audience: string
+  intro: string
+  questions: InterviewQuestion[]
+  thresholds: InterviewThreshold[]
+}
+
+/** Per question, index-aligned with the template's questions. */
+export interface InterviewAnswer {
+  picked: number[] // indices into question.answers, 1 point each
+  alt_credit: boolean // "acceptable alternate response" credited (1 point)
+  alt_note: string
+}
+
+export interface TemplateSnapshot {
+  name: string
+  version: number
+  intro: string
+  questions: InterviewQuestion[]
+  thresholds: InterviewThreshold[]
+}
+
+export interface ApplicationInterview {
+  id: string
+  application_id: string
+  template_id: string | null
+  template: TemplateSnapshot
+  answers: InterviewAnswer[]
+  score: number
+  notes: string
+  interviewer_name: string
+  conducted_at: string
+}
+
+export function interviewMaxScore(questions: InterviewQuestion[]): number {
+  // "Acceptable alternate response" adds a point per question beyond the
+  // listed answers, so the printed minimums stay comparable to the paper form
+  // by counting listed answers only.
+  return questions.reduce((n, q) => n + q.answers.length, 0)
+}
+
+export function interviewScore(answers: InterviewAnswer[]): number {
+  return answers.reduce((n, a) => n + a.picked.length + (a.alt_credit ? 1 : 0), 0)
+}
+
+export async function fetchInterviewTemplates(): Promise<InterviewTemplate[]> {
+  const { data, error } = await supabase
+    .from('people_center_interview_templates')
+    .select('id, name, audience, intro, questions, thresholds, source_file, version, active, updated_at, updated_by_name')
+    .order('name')
+  if (error) throw error
+  return (data as InterviewTemplate[]) ?? []
+}
+
+export async function saveInterviewTemplate(
+  actor: Actor,
+  existing: InterviewTemplate | null,
+  edits: InterviewTemplateEdits,
+): Promise<void> {
+  if (existing) {
+    const { data, error } = await supabase
+      .from('people_center_interview_templates')
+      .update({
+        ...edits,
+        version: existing.version + 1,
+        updated_at: new Date().toISOString(),
+        updated_by: actor.personId,
+        updated_by_name: actor.name,
+      })
+      .eq('id', existing.id)
+      .select('id')
+    if (error) throw error
+    if (!data || data.length === 0) {
+      throw new Error('The database did not accept this change — editing is executive/admin only.')
+    }
+  } else {
+    const { error } = await supabase.from('people_center_interview_templates').insert({
+      ...edits,
+      updated_by: actor.personId,
+      updated_by_name: actor.name,
+    })
+    if (error) throw error
+  }
+  await recordAudit(
+    actor,
+    existing ? 'update' : 'create',
+    'interview_template',
+    existing?.id ?? edits.name,
+    edits.name,
+    existing
+      ? `Interview template "${edits.name}" updated (v${existing.version + 1})`
+      : `Interview template "${edits.name}" added`,
+  )
+}
+
+export async function fetchApplicationInterviews(
+  applicationId: string,
+): Promise<ApplicationInterview[]> {
+  const { data, error } = await supabase
+    .from('people_center_application_interviews')
+    .select('id, application_id, template_id, template, answers, score, notes, interviewer_name, conducted_at')
+    .eq('application_id', applicationId)
+    .order('conducted_at')
+  if (error) throw error
+  return (data as ApplicationInterview[]) ?? []
+}
+
+export async function recordApplicationInterview(
+  actor: Actor,
+  app: ApplicationRow,
+  template: InterviewTemplate,
+  answers: InterviewAnswer[],
+  notes: string,
+): Promise<void> {
+  const score = interviewScore(answers)
+  const snapshot: TemplateSnapshot = {
+    name: template.name,
+    version: template.version,
+    intro: template.intro,
+    questions: template.questions,
+    thresholds: template.thresholds,
+  }
+  const { data, error } = await supabase
+    .from('people_center_application_interviews')
+    .insert({
+      application_id: app.id,
+      template_id: template.id,
+      template: snapshot,
+      answers,
+      score,
+      notes,
+      interviewer_person_id: actor.personId,
+      interviewer_name: actor.name,
+    })
+    .select('id')
+  if (error) throw error
+  if (!data || data.length === 0) {
+    throw new Error('The database did not accept this interview — you are not the reviewer for this position.')
+  }
+  const { error: evErr } = await supabase.from('people_center_application_events').insert({
+    application_id: app.id,
+    event: 'interview.recorded',
+    actor_person_id: actor.personId,
+    actor_name: actor.name,
+    detail: `${template.name} — score ${score}/${interviewMaxScore(template.questions)}`,
+  })
+  if (evErr) throw evErr
+  await recordAudit(
+    actor,
+    'create',
+    'application_interview',
+    app.id,
+    app.applicant?.full_name ?? 'applicant',
+    `Patterned interview recorded (${app.desired_position} — ${app.location_name}): ${template.name}, score ${score}`,
+  )
+}
+
 export interface HiringPosition {
   id: string
   name: string

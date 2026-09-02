@@ -13,6 +13,7 @@ import {
   BookOpenText,
   ChevronsLeft,
   ChevronsRight,
+  ClipboardCheck,
   HelpCircle,
   Inbox,
   UserCog,
@@ -26,12 +27,14 @@ import { HelpPanel } from '../help/HelpPanel'
 import monogram from '../../assets/CG Logo Small.png'
 import { ApplicationsView, ReviewersView } from './HiringView'
 import { JobDescriptionsView } from './JobDescriptionsView'
+import { InterviewsView } from './InterviewsView'
 
-type HiringPage = 'applications' | 'job_descriptions' | 'reviewers'
+type HiringPage = 'applications' | 'job_descriptions' | 'interviews' | 'reviewers'
 
 const NAV: { page: HiringPage; label: string; icon: LucideIcon; configureOnly?: boolean }[] = [
   { page: 'applications', label: 'Applications', icon: Inbox },
   { page: 'job_descriptions', label: 'Job Descriptions', icon: BookOpenText },
+  { page: 'interviews', label: 'Interviews', icon: ClipboardCheck },
   { page: 'reviewers', label: 'Reviewers', icon: UserCog, configureOnly: true },
 ]
 
@@ -140,6 +143,8 @@ export function HiringShell({ session, profile, profileError, onReturn }: Hiring
             <ReviewersView session={session} profile={profile} />
           ) : page === 'job_descriptions' ? (
             <JobDescriptionsView session={session} profile={profile} />
+          ) : page === 'interviews' ? (
+            <InterviewsView session={session} profile={profile} />
           ) : (
             <ApplicationsView session={session} profile={profile} />
           )}
