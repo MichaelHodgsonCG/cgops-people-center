@@ -215,6 +215,183 @@ export function ApplicationsView({ session, profile }: HiringPageProps) {
   )
 }
 
+// Renders the application's answers as readable text, whatever shape the
+// form took: the current guided form's structured fields get purpose-built
+// formatting (address on one line, availability as day ranges, work history
+// as job blocks); anything else — older records, future fields — falls back
+// to a generic prose flattener. Never JSON on screen.
+
+const labelize = (k: string) => k.replace(/_/g, ' ')
+
+function prose(v: unknown): string {
+  if (v === null || v === undefined || v === '') return '—'
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return String(v)
+  if (Array.isArray(v)) return v.map(prose).join('; ')
+  if (typeof v === 'object') {
+    return Object.entries(v as Record<string, unknown>)
+      .filter(([, x]) => x !== '' && x !== null && x !== undefined)
+      .map(([k, x]) => `${labelize(k)}: ${prose(x)}`)
+      .join(' · ')
+  }
+  return String(v)
+}
+
+function FormDetails({ form }: { form: Record<string, unknown> }) {
+  const f = form as Record<string, any>
+  const rendered = new Set<string>()
+  const rows: { label: string; value: React.ReactNode }[] = []
+  const add = (key: string, label: string, value: React.ReactNode) => {
+    if (f[key] === undefined) return
+    rendered.add(key)
+    rows.push({ label, value })
+  }
+
+  if (Array.isArray(f.positions)) add('positions', 'Positions', f.positions.join(', '))
+  if (f.address && typeof f.address === 'object') {
+    const a = f.address
+    add(
+      'address',
+      'Address',
+      [a.street, a.apt && `Apt ${a.apt}`, a.city, [a.province, a.postal_code].filter(Boolean).join(' ')]
+        .filter(Boolean)
+        .join(', '),
+    )
+  }
+  if (f.phones && typeof f.phones === 'object') {
+    const p = f.phones
+    add(
+      'phones',
+      'Phones',
+      [p.day && `Day ${p.day}`, p.evening && `Evening ${p.evening}`, p.alternate && `Alternate ${p.alternate}`]
+        .filter(Boolean)
+        .join(' · ') || '—',
+    )
+  }
+  add('work_eligibility', 'Work eligibility', prose(f.work_eligibility))
+  add('minimum_age', 'Legal age to serve alcohol', prose(f.minimum_age))
+  add('alcohol_service', 'Alcohol service', prose(f.alcohol_service))
+  add('essential_functions', 'Can perform essential functions', prose(f.essential_functions))
+  if (f.affiliated_history && typeof f.affiliated_history === 'object') {
+    const ah = f.affiliated_history
+    add(
+      'affiliated_history',
+      'Affiliated restaurants',
+      ah.ever_employed === 'Yes'
+        ? `Yes — ${ah.location || '?'}${ah.manager ? `, manager: ${ah.manager}` : ''}`
+        : 'No',
+    )
+  }
+  add('employment', 'Employment', prose(f.employment))
+  if (f.availability && typeof f.availability === 'object') {
+    rendered.add('availability')
+    const av = f.availability
+    const dayText =
+      av.days && typeof av.days === 'object' && !Array.isArray(av.days)
+        ? Object.entries(av.days as Record<string, any>)
+            .map(([d, t]) => (t && typeof t === 'object' ? `${d} ${t.earliest ?? '?'}–${t.latest ?? '?'}` : `${d} ${prose(t)}`))
+            .join(', ')
+        : prose(av.days)
+    const rest = Object.entries(av as Record<string, unknown>)
+      .filter(([k, x]) => k !== 'days' && x !== '' && x !== null && x !== undefined)
+      .map(([k, x]) => `${labelize(k)}: ${prose(x)}`)
+      .join(' · ')
+    rows.push({
+      label: 'Availability',
+      value: (
+        <>
+          <span className="block">{dayText || '—'}</span>
+          {rest && <span className="block text-charcoal/65">{rest}</span>}
+        </>
+      ),
+    })
+  }
+  if (Array.isArray(f.work_history)) {
+    rendered.add('work_history')
+    rows.push({
+      label: 'Work history',
+      value: (
+        <div className="space-y-2">
+          {f.work_history.map((j: any, i: number) =>
+            j && typeof j === 'object' ? (
+              <div key={i} className="rounded-md bg-surface-muted/50 px-2.5 py-1.5">
+                <span className="block font-medium">
+                  {j.company ?? j.employer ?? '?'}
+                  {(j.from || j.to) && (
+                    <span className="font-normal text-charcoal/55"> · {j.from ?? '?'} – {j.to ?? '?'}</span>
+                  )}
+                </span>
+                {(j.position_duties ?? j.role) && <span className="block">{j.position_duties ?? j.role}</span>}
+                <span className="block text-xs text-charcoal/60">
+                  {[
+                    j.address && `Address: ${j.address}`,
+                    j.supervisor && `Supervisor: ${j.supervisor}${j.supervisor_phone ? ` (${j.supervisor_phone})` : ''}`,
+                    j.may_contact && `May contact: ${j.may_contact}`,
+                    j.hours_per_week && `${j.hours_per_week} hrs/wk`,
+                    j.weekly_earnings && `Earnings: ${j.weekly_earnings}`,
+                    j.reason_for_leaving && `Left: ${j.reason_for_leaving}`,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </span>
+              </div>
+            ) : (
+              <span key={i} className="block">{prose(j)}</span>
+            ),
+          )}
+        </div>
+      ),
+    })
+  }
+  if (Array.isArray(f.references)) {
+    rendered.add('references')
+    rows.push({
+      label: 'References',
+      value: (
+        <div className="space-y-0.5">
+          {f.references.map((r: any, i: number) =>
+            r && typeof r === 'object' ? (
+              <span key={i} className="block">
+                {r.name ?? '?'}
+                {r.relationship && <span className="text-charcoal/60"> — {r.relationship}</span>}
+                {r.years_known && <span className="text-charcoal/60">, known {r.years_known} yrs</span>}
+                {r.phone && <span className="text-charcoal/60"> · {r.phone}</span>}
+              </span>
+            ) : (
+              <span key={i} className="block">{prose(r)}</span>
+            ),
+          )}
+        </div>
+      ),
+    })
+  }
+  add('how_heard', 'How they heard about us', prose(f.how_heard))
+  if (f.declaration && typeof f.declaration === 'object') {
+    const d = f.declaration
+    add(
+      'declaration',
+      'Declaration',
+      d.agreed
+        ? `Agreed and signed "${d.signed_name ?? '?'}"${d.signed_at ? ` on ${new Date(d.signed_at).toLocaleDateString()}` : ''}${d.text_version ? ` (${d.text_version})` : ''}`
+        : prose(d),
+    )
+  }
+  // Anything not specially handled — older records, future fields.
+  for (const [k, v] of Object.entries(form)) {
+    if (!rendered.has(k)) rows.push({ label: labelize(k), value: prose(v) })
+  }
+
+  return (
+    <dl className="grid grid-cols-1 gap-y-2 text-sm">
+      {rows.map((r, i) => (
+        <div key={i}>
+          <dt className="text-[11px] uppercase tracking-wide text-charcoal/45">{r.label}</dt>
+          <dd className="whitespace-pre-wrap text-charcoal/80">{r.value}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
 // The application's path through the hiring process as a phase tracker:
 // each stage a dot on the line, the current one live, terminal outcome at
 // the end, updated-ago with a stale flag, and the next action per the CG
@@ -462,16 +639,7 @@ function ApplicationPanel({
           <h4 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-charcoal/50">
             <FileText className="h-3.5 w-3.5" /> Application
           </h4>
-          <dl className="grid grid-cols-1 gap-y-1.5 text-sm">
-            {Object.entries(app.form).map(([k, v]) => (
-              <div key={k}>
-                <dt className="text-[11px] uppercase tracking-wide text-charcoal/45">{k.replace(/_/g, ' ')}</dt>
-                <dd className="whitespace-pre-wrap text-charcoal/80">
-                  {typeof v === 'string' ? v : JSON.stringify(v, null, 1)}
-                </dd>
-              </div>
-            ))}
-          </dl>
+          <FormDetails form={app.form} />
           <p className="mt-2 border-t border-surface-line pt-2 text-[11px] text-charcoal/50">
             Submitted {fmt(app.submitted_at)} · retention until {app.retention_purge_after}
             {!app.complete && ' · INCOMPLETE'}
