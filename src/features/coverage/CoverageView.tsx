@@ -40,7 +40,10 @@ type Reason =
 export function CoverageView({ session, profile }: CoverageViewProps) {
   const actor = actorFrom(profile, session)
   const user = profile ? toPermissionUser(profile) : null
-  const canManage = can(user, 'view', 'user_scopes') // admin (all) or executive
+  const canManage = can(user, 'view', 'user_scopes') // admin or executive (view)
+  // Granting/removing scope is admin-only (standard 77ca34f4): executives see
+  // coverage read-only. No control renders that RLS would then refuse.
+  const canGrant = can(user, 'update', 'user_scopes')
 
   const [users, setUsers] = useState<ScopeUser[]>([])
   const [regions, setRegions] = useState<Region[]>([])
@@ -205,9 +208,16 @@ export function CoverageView({ session, profile }: CoverageViewProps) {
       </h2>
       <p className="mb-4 max-w-2xl text-sm text-charcoal/60">
         See exactly which locations a user can reach and why — their region-derived
-        default (from the region they lead) plus person-keyed assignment grants —
-        and add or remove grants. Coverage follows the person, not the login.
+        default (from the region they lead) plus person-keyed assignment grants
+        {canGrant ? ' — and add or remove grants' : ''}. Coverage follows the person, not the login.
       </p>
+
+      {!canGrant && (
+        <p className="mb-4 max-w-2xl rounded-md bg-surface-muted px-3 py-2 text-xs text-charcoal/60">
+          Viewing only: changing a user's coverage is admin-only (platform access standard,
+          2026-09-03). If a scope needs changing, ask an admin.
+        </p>
+      )}
 
       {error && (
         <p className="mb-3 rounded-md bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>
@@ -374,19 +384,22 @@ export function CoverageView({ session, profile }: CoverageViewProps) {
                         </span>
                       )}
                     </span>
-                    <button
-                      onClick={() => void handleRemove(a)}
-                      disabled={busy}
-                      aria-label="Remove grant"
-                      className="rounded p-1 text-charcoal/40 hover:text-danger disabled:opacity-50"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+                    {canGrant && (
+                      <button
+                        onClick={() => void handleRemove(a)}
+                        disabled={busy}
+                        aria-label="Remove grant"
+                        className="rounded p-1 text-charcoal/40 hover:text-danger disabled:opacity-50"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
             )}
 
+            {canGrant && (
             <div className="flex flex-wrap items-center gap-2 border-t border-surface-line pt-3">
               <select
                 value={grantType}
@@ -426,6 +439,7 @@ export function CoverageView({ session, profile }: CoverageViewProps) {
                 <Plus className="h-4 w-4" /> Add grant
               </button>
             </div>
+            )}
           </section>
         </div>
       )}

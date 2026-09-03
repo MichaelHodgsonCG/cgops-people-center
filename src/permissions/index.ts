@@ -78,9 +78,12 @@ export function can(
     case 'restricted_notes':
       return action === 'view' && user.role === 'executive'
     case 'user_scopes':
-      // Covered-locations picker — HQ altitude only (mirrors the widened
-      // people_center_user_scopes RLS: admin + executive manage grants).
-      return user.role === 'executive'
+      // Covered locations: executives VIEW coverage; GRANTING (expanding
+      // another user's scope) is ADMIN-ONLY per standard 77ca34f4 / Michael's
+      // 2026-09-03 ruling — mirrors migration 20260903150000, which removed
+      // the executive branch from the user_scopes write policies. Admins
+      // short-circuit true above.
+      return action === 'view' && user.role === 'executive'
     case 'hiring':
       // View: HQ plus the manager roles that can be configured as per-position
       // reviewers (a GM is usually a location_leader) — RLS returns only the

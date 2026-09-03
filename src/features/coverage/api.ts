@@ -116,26 +116,43 @@ export async function removeAssignment(
     .eq('id', a.id)
   if (error) throw error
   // Clean up any matching LEGACY account-keyed scope so the transitional
-  // my_coverage() can't re-grant what was just revoked.
+  // my_coverage() can't re-grant what was just revoked. These deletes are
+  // admin-only under RLS (migration 20260903150000) and RLS refuses them
+  // SILENTLY (zero rows), so verify: if a matching legacy row survives, fail
+  // loud rather than leave a revocation that quietly un-revokes itself.
+  let legacy = supabase
+    .from('people_center_user_scopes')
+    .delete()
+    .eq('auth_user_id', user.auth_user_id)
+  let check = supabase
+    .from('people_center_user_scopes')
+    .select('id')
+    .eq('auth_user_id', user.auth_user_id)
   if (a.region_id) {
-    await supabase
-      .from('people_center_user_scopes')
-      .delete()
-      .eq('auth_user_id', user.auth_user_id)
-      .eq('region_id', a.region_id)
+    legacy = legacy.eq('region_id', a.region_id)
+    check = check.eq('region_id', a.region_id)
   } else if (a.cgops_location_id) {
     const { data: pcLocs } = await supabase
       .from('people_center_locations')
       .select('id')
       .eq('cgops_location_id', a.cgops_location_id)
     const ids = ((pcLocs as { id: string }[]) ?? []).map((l) => l.id)
-    if (ids.length > 0) {
-      await supabase
-        .from('people_center_user_scopes')
-        .delete()
-        .eq('auth_user_id', user.auth_user_id)
-        .in('location_id', ids)
+    if (ids.length === 0) {
+      await recordAudit(actor, 'delete', 'location_assignment', a.id, user.email, `Removed ${label}`)
+      return
     }
+    legacy = legacy.in('location_id', ids)
+    check = check.in('location_id', ids)
+  } else {
+    await recordAudit(actor, 'delete', 'location_assignment', a.id, user.email, `Removed ${label}`)
+    return
+  }
+  await legacy
+  const { data: leftover } = await check
+  if ((leftover ?? []).length > 0) {
+    throw new Error(
+      'The grant was removed, but a matching legacy scope row could not be deleted (admin-only). Ask an admin to finish the removal, or the old scope may re-grant this coverage.',
+    )
   }
   await recordAudit(actor, 'delete', 'location_assignment', a.id, user.email, `Removed ${label}`)
 }
