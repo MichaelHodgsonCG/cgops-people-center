@@ -143,7 +143,7 @@ export const NEXT_ACTION: Partial<Record<ApplicationStatus, string>> = {
   submitted: 'Screen the application — review the answers, prior applications and any watch-list flag, then move to Screening.',
   screening: 'If they look right, contact the applicant and book the patterned interview.',
   interview: 'Record the patterned interview below, then move to Reference check.',
-  reference_check: 'Complete at least 2 positive reference checks (Mgmt Hiring — Step 2 has the form), then move to Decision pending.',
+  reference_check: 'Complete at least 2 positive reference checks — record each call in the form below — then move to Decision pending.',
   decision_pending: 'Make the decision and communicate it to the applicant within one week.',
 }
 
@@ -151,7 +151,7 @@ export const MGMT_NEXT_ACTION: Partial<Record<ApplicationStatus, string>> = {
   submitted: 'Review the application and any watch-list flag, then move to Screening — whoever contacts the applicant runs the screening questions.',
   screening: 'Run the screening call and record the answers below (Chef Screening Questions for BOH). If it goes well, move to Culture interview.',
   culture_interview: 'Run Step 1 — the Culture/Values Interview (guide in Mgmt Hiring). This or the financial interview must happen in person. Record notes, then request 3 professional references.',
-  reference_check: 'Step 2 — minimum 2 POSITIVE references, at least 1 self-sourced; search the candidate online. Record the outcome, then move on.',
+  reference_check: 'Step 2 — minimum 2 POSITIVE references, at least 1 self-sourced; search the candidate online. Record each call in the form below, then move on.',
   financial_interview: 'Step 3 — send the Gourmet Haven case study + P&L in advance; use the tier for the role (GSM/SM/Sous · BM/AGM · GM/CDC) and record the interview below.',
   tais: 'Step 4 — AGM/GM/CDC only ($350, via Corey Dalton). A TAIS red flag is a HARD STOP. Other roles: move straight on.',
   final_interview: 'Step 5 — for AGM/GM/CDC this interview is held by the VP People, VP Ops, President or Corporate Chefs.',
@@ -601,6 +601,100 @@ export async function recordApproval(
     app.id,
     app.applicant?.full_name ?? 'applicant',
     `${decision === 'approved' ? 'Approved' : 'Rejected'} ${app.desired_position} candidate (${app.location_name})${note ? `: ${note}` : ''}`,
+  )
+}
+
+// --- Reference checks --------------------------------------------------------
+// The fillable Reference Check Form from the CG Mgmt Interview Process
+// ("2. Reference Checks" tab, right half): one record per reference call,
+// captured inside the Reference check step. The standard: minimum 2 POSITIVE
+// references, at least 1 self-sourced for management. Records are immutable
+// for the recorder (same shape as recorded interviews).
+
+export const REFERENCE_SOURCES = ['Candidate provided', 'CG sourced'] as const
+
+export interface ReferenceCheck {
+  id: string
+  application_id: string
+  source: string
+  contact_person: string
+  company: string
+  phone: string
+  contact_position: string
+  position_confirmed: string
+  job_performance: string
+  attendance: string
+  attitude: string
+  opportunities_concerns: string
+  would_rehire: string
+  other_comments: string
+  checked_on: string | null
+  checked_by_name: string
+  created_at: string
+}
+
+export interface ReferenceCheckEdits {
+  source: string
+  contact_person: string
+  company: string
+  phone: string
+  contact_position: string
+  position_confirmed: string
+  job_performance: string
+  attendance: string
+  attitude: string
+  opportunities_concerns: string
+  would_rehire: string
+  other_comments: string
+  checked_on: string
+}
+
+export async function fetchReferenceChecks(applicationId: string): Promise<ReferenceCheck[]> {
+  const { data, error } = await supabase
+    .from('people_center_reference_checks')
+    .select(
+      'id, application_id, source, contact_person, company, phone, contact_position, position_confirmed, job_performance, attendance, attitude, opportunities_concerns, would_rehire, other_comments, checked_on, checked_by_name, created_at',
+    )
+    .eq('application_id', applicationId)
+    .order('created_at')
+  if (error) throw error
+  return (data as ReferenceCheck[]) ?? []
+}
+
+export async function recordReferenceCheck(
+  actor: Actor,
+  app: ApplicationRow,
+  edits: ReferenceCheckEdits,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from('people_center_reference_checks')
+    .insert({
+      application_id: app.id,
+      ...edits,
+      checked_on: edits.checked_on || null,
+      checked_by: actor.personId,
+      checked_by_name: actor.name,
+    })
+    .select('id')
+  if (error) throw error
+  if (!data || data.length === 0) {
+    throw new Error('The database did not accept this reference check — you are not the reviewer for this position.')
+  }
+  const { error: evErr } = await supabase.from('people_center_application_events').insert({
+    application_id: app.id,
+    event: 'reference.recorded',
+    actor_person_id: actor.personId,
+    actor_name: actor.name,
+    detail: `${edits.contact_person}${edits.company ? ` (${edits.company})` : ''} — rehire: ${edits.would_rehire || '?'}`,
+  })
+  if (evErr) throw evErr
+  await recordAudit(
+    actor,
+    'create',
+    'reference_check',
+    app.id,
+    app.applicant?.full_name ?? 'applicant',
+    `Reference check recorded (${app.desired_position} — ${app.location_name}): ${edits.contact_person}, rehire ${edits.would_rehire || '?'}`,
   )
 }
 

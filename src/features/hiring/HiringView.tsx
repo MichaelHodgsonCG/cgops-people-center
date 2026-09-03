@@ -15,6 +15,7 @@ import { errText } from '../../lib/errText'
 import { can, toPermissionUser } from '../../permissions'
 import { PersonPicker, type PickedPerson } from '../../components/PersonPicker'
 import { InterviewSection } from './InterviewSection'
+import { ReferenceSection } from './ReferenceSection'
 import { fetchPeopleOptions, type PersonOption } from '../bench/api'
 import type { UserProfile } from '../../types'
 import {
@@ -1042,6 +1043,9 @@ function WorkflowSteps({
                       kinds={app.flow === 'mgmt' ? ['questionnaire'] : ['scored']}
                       title={app.flow === 'mgmt' ? 'Screening call record' : 'Patterned interview'}
                     />
+                  )}
+                  {s === 'reference_check' && actionable && (
+                    <ReferenceSection app={app} actor={actor} />
                   )}
                   {showApprovals && actionable && (
                     <div className="mt-2">
