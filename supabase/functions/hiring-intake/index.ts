@@ -26,8 +26,12 @@ const REQUIRED_FORM_FIELDS = [
   'availability',
   'work_history',
   'references',
+  'declaration', // the signed declaration from the official form (V.2026.01)
 ]
-const RETENTION_YEARS = 3 // pending verification against the original document
+// VERIFIED against the official CG Application for Employment (V.2026.01):
+// "my application will remain on file for 3 years in accordance with
+// Employment Standards Legislation" — stated in the signed declaration.
+const RETENTION_YEARS = 3
 const RATE_LIMIT_PER_HOUR = 20
 
 const CORS = {
