@@ -18,29 +18,36 @@ import { InterviewSection } from './InterviewSection'
 import { fetchPeopleOptions, type PersonOption } from '../bench/api'
 import type { UserProfile } from '../../types'
 import {
-  NEXT_ACTION,
-  PIPELINE_STAGES,
+  MGMT_STATUS_FLOW,
   STATUS_FLOW,
   STATUS_LABELS,
   TERMINAL_STATUSES,
   checkWatchlist,
   daysSince,
   isStale,
+  nextActionFor,
+  pipelineFor,
   screenApplication,
+  statusFlowFor,
   fetchAllPositions,
   fetchApplicationDetail,
   fetchApplications,
+  fetchApprovals,
   fetchHiringReviewers,
+  fetchMgmtApprovers,
   fetchPriorApplications,
   fetchWatchlistEntriesByName,
+  recordApproval,
   setApplicationStatus,
   setHiringReviewer,
   type ApplicationAck,
+  type ApplicationApproval,
   type ApplicationEvent,
   type ApplicationRow,
   type ApplicationStatus,
   type HiringPosition,
   type HiringReviewer,
+  type MgmtApprover,
   type WatchlistEntry,
   type WatchlistMatch,
 } from './api'
@@ -55,7 +62,16 @@ const STATUS_CLASS: Record<string, string> = {
   hired: 'bg-success/10 text-success',
   not_hired: 'bg-surface-muted text-charcoal/60',
   withdrawn: 'bg-surface-muted text-charcoal/45',
+  culture_interview: 'bg-warning/10 text-warning',
+  financial_interview: 'bg-warning/10 text-warning',
+  tais: 'bg-warning/10 text-warning',
+  final_interview: 'bg-warning/10 text-warning',
+  approvals: 'bg-danger/10 text-danger',
+  offer: 'bg-info/10 text-info',
 }
+
+// The status filter offers every stage across both flows, TM order first.
+const FILTER_STATUSES = [...new Set([...STATUS_FLOW, ...MGMT_STATUS_FLOW])]
 
 const fmt = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' })
@@ -113,14 +129,24 @@ export function ApplicationsView({ session, profile }: HiringPageProps) {
         {/* The guided public form, in preview mode (never submits). The live
             link for websites is /apply — submissions stay off until Michael
             flips HIRING_INTAKE_ENABLED. */}
-        <a
-          href="/apply?preview=1"
-          target="_blank"
-          rel="noreferrer"
-          className="flex items-center gap-1.5 rounded-md border border-surface-line px-2.5 py-1.5 text-xs font-medium hover:bg-surface-muted"
-        >
-          <ExternalLink className="h-3.5 w-3.5" /> Preview application form
-        </a>
+        <span className="flex flex-wrap gap-2">
+          <a
+            href="/apply?preview=1"
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1.5 rounded-md border border-surface-line px-2.5 py-1.5 text-xs font-medium hover:bg-surface-muted"
+          >
+            <ExternalLink className="h-3.5 w-3.5" /> Preview application form
+          </a>
+          <a
+            href="/apply?flow=mgmt&preview=1"
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1.5 rounded-md border border-surface-line px-2.5 py-1.5 text-xs font-medium hover:bg-surface-muted"
+          >
+            <ExternalLink className="h-3.5 w-3.5" /> Preview manager form
+          </a>
+        </span>
       </div>
 
       {error && <p className="mb-3 rounded-md bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>}
@@ -134,7 +160,7 @@ export function ApplicationsView({ session, profile }: HiringPageProps) {
         >
           <option value="open">Open (in progress)</option>
           <option value="all">All</option>
-          {STATUS_FLOW.map((s) => (
+          {FILTER_STATUSES.map((s) => (
             <option key={s} value={s}>
               {STATUS_LABELS[s]}
             </option>
@@ -178,7 +204,14 @@ export function ApplicationsView({ session, profile }: HiringPageProps) {
                     <ScreenDot app={a} />
                     {a.applicant?.full_name ?? '?'}
                   </td>
-                  <td className="px-4 py-2.5">{a.desired_position}</td>
+                  <td className="px-4 py-2.5">
+                    {a.desired_position}
+                    {a.flow === 'mgmt' && (
+                      <span className="ml-1.5 rounded-full bg-charcoal/85 px-1.5 py-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-white">
+                        Mgmt
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-2.5 text-xs text-charcoal/60">{a.location_name}</td>
                   <td className="px-4 py-2.5 text-xs whitespace-nowrap text-charcoal/60">
                     {new Date(a.submitted_at).toLocaleDateString()}
@@ -473,19 +506,25 @@ function StageTracker({
   app,
   actor,
   onChanged,
+  advanceBlock,
 }: {
   app: ApplicationRow
   actor: ReturnType<typeof actorFrom>
   onChanged: () => void
+  /** When set, the one-click advance is disabled and this reason is shown
+   * (mgmt approvals gate: all named approvers must approve first). */
+  advanceBlock?: string | null
 }) {
+  const stages = pipelineFor(app)
+  const nextAction = nextActionFor(app)
   const terminal = TERMINAL_STATUSES.includes(app.status)
-  const currentIdx = terminal ? PIPELINE_STAGES.length : PIPELINE_STAGES.indexOf(app.status)
+  const currentIdx = terminal ? stages.length : stages.indexOf(app.status)
   const stale = isStale(app)
   // One-click advance to the next pipeline stage; the final move (to an
   // outcome) stays a deliberate choice in the Move stage box below.
   const nextStage =
-    !terminal && currentIdx >= 0 && currentIdx < PIPELINE_STAGES.length - 1
-      ? PIPELINE_STAGES[currentIdx + 1]
+    !terminal && currentIdx >= 0 && currentIdx < stages.length - 1
+      ? stages[currentIdx + 1]
       : null
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -505,7 +544,7 @@ function StageTracker({
   return (
     <section className="mb-3 rounded-xl border border-surface-line p-3">
       <div className="flex items-start gap-0">
-        {PIPELINE_STAGES.map((s, i) => {
+        {stages.map((s, i) => {
           const state = terminal || i < currentIdx ? 'done' : i === currentIdx ? 'current' : 'upcoming'
           return (
             <div key={s} className="flex min-w-0 flex-1 flex-col items-center">
@@ -522,7 +561,7 @@ function StageTracker({
                 />
                 <div
                   className={`h-0.5 flex-1 ${
-                    i === PIPELINE_STAGES.length - 1
+                    i === stages.length - 1
                       ? terminal
                         ? 'bg-cg-orange'
                         : 'bg-transparent'
@@ -564,15 +603,16 @@ function StageTracker({
           </span>
         )}
       </div>
-      {NEXT_ACTION[app.status] && (
+      {nextAction && (
         <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 rounded-md bg-cg-orange-soft/40 px-2.5 py-1.5">
           <p className="min-w-0 flex-1 text-xs text-charcoal/75">
-            <span className="font-medium text-cg-orange">Next:</span> {NEXT_ACTION[app.status]}
+            <span className="font-medium text-cg-orange">Next:</span> {nextAction}
           </p>
           {nextStage && (
             <button
               onClick={() => void advance()}
-              disabled={busy}
+              disabled={busy || Boolean(advanceBlock)}
+              title={advanceBlock ?? undefined}
               className="shrink-0 rounded-md bg-cg-orange px-2.5 py-1 text-xs font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
             >
               {busy ? 'Moving…' : `Move to ${STATUS_LABELS[nextStage]} →`}
@@ -580,6 +620,7 @@ function StageTracker({
           )}
         </div>
       )}
+      {advanceBlock && <p className="mt-1 text-xs font-medium text-danger">{advanceBlock}</p>}
       {err && <p className="mt-1 text-xs text-danger">{err}</p>}
     </section>
   )
@@ -601,10 +642,35 @@ function ApplicationPanel({
   const [prior, setPrior] = useState<Awaited<ReturnType<typeof fetchPriorApplications>>>([])
   const [watch, setWatch] = useState<WatchlistMatch[]>([])
   const [watchNotes, setWatchNotes] = useState<WatchlistEntry[]>([])
+  const [approvers, setApprovers] = useState<MgmtApprover[]>([])
+  const [approvals, setApprovals] = useState<ApplicationApproval[]>([])
   const [nextStatus, setNextStatus] = useState<ApplicationStatus>(app.status)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+
+  const loadApprovals = () => {
+    if (app.flow !== 'mgmt') return
+    fetchMgmtApprovers().then(setApprovers).catch(() => setApprovers([]))
+    fetchApprovals(app.id).then(setApprovals).catch(() => setApprovals([]))
+  }
+  useEffect(loadApprovals, [app.id, app.flow])
+
+  // Michael's accountability gate: every named approver for this track must
+  // have approved before the application can advance past Approvals.
+  const requiredApprovers = useMemo(
+    () => approvers.filter((a) => a.track === app.track),
+    [approvers, app.track],
+  )
+  const allApproved =
+    requiredApprovers.length > 0 &&
+    requiredApprovers.every((r) =>
+      approvals.some((x) => x.approver_person_id === r.person_id && x.decision === 'approved'),
+    )
+  const approvalsGate =
+    app.flow === 'mgmt' && app.status === 'approvals' && !allApproved
+      ? 'All named approvers must approve (below) before this moves to Offer.'
+      : null
 
   useEffect(() => {
     fetchApplicationDetail(app.id)
@@ -625,6 +691,16 @@ function ApplicationPanel({
 
   async function saveStatus() {
     if (nextStatus === app.status) return
+    // The manual mover honours the same gate as the one-click advance —
+    // an Offer (or Hired) needs every named approver's sign-off first.
+    if (
+      app.flow === 'mgmt' &&
+      !allApproved &&
+      ['offer', 'hired'].includes(nextStatus)
+    ) {
+      setErr('All named approvers must approve before this application can move to Offer or Hired.')
+      return
+    }
     setBusy(true)
     setErr(null)
     try {
@@ -656,7 +732,7 @@ function ApplicationPanel({
           </span>
         </div>
 
-        <StageTracker app={app} actor={actor} onChanged={onChanged} />
+        <StageTracker app={app} actor={actor} onChanged={onChanged} advanceBlock={approvalsGate} />
 
         <ScreeningCard app={app} watch={watch} watchNotes={watchNotes} />
 
@@ -700,6 +776,16 @@ function ApplicationPanel({
 
         <InterviewSection app={app} actor={actor} />
 
+        {app.flow === 'mgmt' && (
+          <ApprovalsSection
+            app={app}
+            actor={actor}
+            required={requiredApprovers}
+            approvals={approvals}
+            onRecorded={loadApprovals}
+          />
+        )}
+
         <section className="mb-3 rounded-xl border border-surface-line p-3">
           <h4 className="mb-2 text-xs font-medium uppercase tracking-wide text-charcoal/50">Move stage</h4>
           <div className="flex flex-wrap items-center gap-2">
@@ -708,7 +794,7 @@ function ApplicationPanel({
               onChange={(e) => setNextStatus(e.target.value as ApplicationStatus)}
               className="rounded-md border border-surface-line bg-surface px-2 py-1.5 text-sm"
             >
-              {STATUS_FLOW.map((s) => (
+              {statusFlowFor(app).map((s) => (
                 <option key={s} value={s}>
                   {STATUS_LABELS[s]}
                 </option>
@@ -751,6 +837,134 @@ function ApplicationPanel({
         </section>
       </aside>
     </>
+  )
+}
+
+// Sign-offs on a management hire — Michael's ruling (2026-09-03): Megan
+// Stover + John Mackay approve all FOH managers; Todd Clarmo + Michael
+// Hodgson approve all BOH chefs. The required approvers are data
+// (people_center_mgmt_approvers); RLS lets an approver sign ONLY as
+// themselves, and a signature is immutable once written. The UI shows the
+// buttons only to the signed-in named approver — the database is the
+// enforcement, this is just honest chrome.
+function ApprovalsSection({
+  app,
+  actor,
+  required,
+  approvals,
+  onRecorded,
+}: {
+  app: ApplicationRow
+  actor: ReturnType<typeof actorFrom>
+  required: MgmtApprover[]
+  approvals: ApplicationApproval[]
+  onRecorded: () => void
+}) {
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const byPerson = new Map(approvals.map((a) => [a.approver_person_id, a]))
+  const myRow = actor.personId ? required.find((r) => r.person_id === actor.personId) : undefined
+  const myDecision = actor.personId ? byPerson.get(actor.personId) : undefined
+  const extras = approvals.filter((a) => !required.some((r) => r.person_id === a.approver_person_id))
+  const trackLabel = app.track === 'boh' ? 'BOH chefs' : 'FOH managers'
+
+  async function sign(decision: 'approved' | 'rejected') {
+    setBusy(true)
+    setErr(null)
+    try {
+      await recordApproval(actor, app, decision, note.trim())
+      setNote('')
+      onRecorded()
+    } catch (e) {
+      setErr(errText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="mb-3 rounded-xl border border-surface-line p-3">
+      <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-charcoal/50">
+        Sign-offs — required for all {trackLabel}
+      </h4>
+      <p className="mb-2 text-[11px] text-charcoal/50">
+        Each approver signs personally; a signature cannot be edited or removed. The application
+        cannot move to Offer until everyone below has approved.
+      </p>
+      {required.length === 0 ? (
+        <p className="text-xs text-danger">
+          No approvers are configured for this track — contact HQ before proceeding.
+        </p>
+      ) : (
+        <ul className="space-y-1">
+          {required.map((r) => {
+            const d = byPerson.get(r.person_id)
+            return (
+              <li
+                key={r.person_id}
+                className="flex flex-wrap items-baseline justify-between gap-2 rounded-md border border-surface-line px-3 py-1.5 text-sm"
+              >
+                <span className="font-medium">{r.person_name}</span>
+                {d ? (
+                  <span className="text-xs">
+                    <span
+                      className={`rounded-full px-2 py-0.5 font-medium ${
+                        d.decision === 'approved' ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'
+                      }`}
+                    >
+                      {d.decision === 'approved' ? 'Approved' : 'Rejected'}
+                    </span>{' '}
+                    <span className="text-charcoal/50">{fmt(d.created_at)}</span>
+                    {d.note && <span className="block text-charcoal/65">“{d.note}”</span>}
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-surface-muted px-2 py-0.5 text-xs text-charcoal/50">
+                    Pending
+                  </span>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {extras.length > 0 && (
+        <ul className="mt-1.5 space-y-0.5 text-xs text-charcoal/60">
+          {extras.map((a) => (
+            <li key={a.id}>
+              {a.approver_name}: {a.decision} {fmt(a.created_at)}
+              {a.note && ` — “${a.note}”`}
+            </li>
+          ))}
+        </ul>
+      )}
+      {myRow && !myDecision && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-cg-orange/40 bg-cg-orange-soft/20 p-2.5">
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Note for the record (optional)"
+            className="min-w-48 flex-1 rounded-md border border-surface-line bg-surface px-2 py-1.5 text-sm"
+          />
+          <button
+            onClick={() => void sign('approved')}
+            disabled={busy}
+            className="rounded-md bg-success px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            {busy ? 'Signing…' : 'Approve'}
+          </button>
+          <button
+            onClick={() => void sign('rejected')}
+            disabled={busy}
+            className="rounded-md bg-danger px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            Reject
+          </button>
+        </div>
+      )}
+      {err && <p className="mt-1.5 text-xs text-danger">{err}</p>}
+    </section>
   )
 }
 

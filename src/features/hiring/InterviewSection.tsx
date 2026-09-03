@@ -36,8 +36,12 @@ export function InterviewSection({ app, actor }: { app: ApplicationRow; actor: A
   }
   useEffect(load, [app.id])
   useEffect(() => {
-    fetchInterviewTemplates().then(setTemplates).catch(() => setTemplates([]))
-  }, [])
+    // Screening questionnaires belong to the management flow; TM applications
+    // keep the scored hourly instruments only.
+    fetchInterviewTemplates()
+      .then((ts) => setTemplates(app.flow === 'mgmt' ? ts : ts.filter((t) => t.kind !== 'questionnaire')))
+      .catch(() => setTemplates([]))
+  }, [app.flow])
 
   return (
     <section className="mb-3 rounded-xl border border-surface-line p-3">
@@ -85,6 +89,7 @@ export function InterviewSection({ app, actor }: { app: ApplicationRow; actor: A
 
 function RecordedInterview({ iv }: { iv: ApplicationInterview }) {
   const [open, setOpen] = useState(false)
+  const questionnaire = iv.template.kind === 'questionnaire'
   const max = interviewMaxScore(iv.template.questions)
   return (
     <li className="rounded-md border border-surface-line">
@@ -95,26 +100,32 @@ function RecordedInterview({ iv }: { iv: ApplicationInterview }) {
         <span className="flex items-center gap-1.5">
           {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
           <span>
-            <span className="font-medium">
-              {iv.score}/{max}
-            </span>{' '}
-            · {iv.template.name}{' '}
+            {!questionnaire && (
+              <>
+                <span className="font-medium">
+                  {iv.score}/{max}
+                </span>{' '}
+                ·{' '}
+              </>
+            )}
+            {iv.template.name}{' '}
             <span className="text-xs text-charcoal/50">
               (v{iv.template.version}) — {iv.interviewer_name}, {fmtDate(iv.conducted_at)}
             </span>
           </span>
         </span>
         <span className="flex shrink-0 gap-1">
-          {iv.template.thresholds.map((th) => (
-            <span
-              key={th.label}
-              className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                iv.score >= th.min ? 'bg-success/10 text-success' : 'bg-surface-muted text-charcoal/50'
-              }`}
-            >
-              {th.label} {iv.score >= th.min ? '✓' : `< ${th.min}`}
-            </span>
-          ))}
+          {!questionnaire &&
+            iv.template.thresholds.map((th) => (
+              <span
+                key={th.label}
+                className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                  iv.score >= th.min ? 'bg-success/10 text-success' : 'bg-surface-muted text-charcoal/50'
+                }`}
+              >
+                {th.label} {iv.score >= th.min ? '✓' : `< ${th.min}`}
+              </span>
+            ))}
         </span>
       </button>
       {open && (
@@ -122,6 +133,20 @@ function RecordedInterview({ iv }: { iv: ApplicationInterview }) {
           <ol className="space-y-2 text-xs">
             {iv.template.questions.map((q, i) => {
               const a = iv.answers[i]
+              if (questionnaire) {
+                return (
+                  <li key={i}>
+                    <p className="font-medium text-charcoal/80">
+                      {i + 1}. {q.prompt}
+                    </p>
+                    {a?.text?.trim() ? (
+                      <p className="mt-0.5 whitespace-pre-wrap pl-4 text-charcoal/70">{a.text}</p>
+                    ) : (
+                      <p className="mt-0.5 pl-4 text-charcoal/45">Not answered.</p>
+                    )}
+                  </li>
+                )
+              }
               const pts = a ? a.picked.length + (a.alt_credit ? 1 : 0) : 0
               return (
                 <li key={i}>
@@ -178,9 +203,13 @@ function InterviewRecorder({
 
   useEffect(() => {
     setAnswers(
-      template ? template.questions.map(() => ({ picked: [], alt_credit: false, alt_note: '' })) : [],
+      template
+        ? template.questions.map(() => ({ picked: [], alt_credit: false, alt_note: '', text: '' }))
+        : [],
     )
   }, [template])
+
+  const questionnaire = template?.kind === 'questionnaire'
 
   function toggle(qi: number, ai: number) {
     setAnswers((prev) =>
@@ -229,11 +258,16 @@ function InterviewRecorder({
             </option>
           ))}
         </select>
-        {template && (
+        {template && !questionnaire && (
           <span className="text-xs font-medium text-charcoal/70">
             Score so far: {score}/{interviewMaxScore(template.questions)}
             {' · '}
             {template.thresholds.map((th) => `${th.label} min ${th.min}`).join(' · ')}
+          </span>
+        )}
+        {questionnaire && (
+          <span className="text-xs text-charcoal/60">
+            Screening questionnaire — write down the answers in the applicant's own words.
           </span>
         )}
       </div>
@@ -247,6 +281,22 @@ function InterviewRecorder({
             {template.questions.map((q, qi) => {
               const a = answers[qi]
               if (!a) return null
+              if (questionnaire) {
+                return (
+                  <li key={qi} className="rounded-md border border-surface-line bg-surface p-2.5">
+                    <p className="mb-1 text-sm font-medium">
+                      {qi + 1}. {q.prompt}
+                    </p>
+                    <textarea
+                      value={a.text ?? ''}
+                      onChange={(e) => setAlt(qi, { text: e.target.value })}
+                      rows={2}
+                      placeholder="Their answer…"
+                      className="w-full rounded-md border border-surface-line bg-surface px-2 py-1.5 text-sm"
+                    />
+                  </li>
+                )
+              }
               const pts = a.picked.length + (a.alt_credit ? 1 : 0)
               return (
                 <li key={qi} className="rounded-md border border-surface-line bg-surface p-2.5">
@@ -306,7 +356,13 @@ function InterviewRecorder({
           disabled={busy || !template}
           className="rounded-md bg-cg-orange px-3 py-1.5 text-sm font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
         >
-          {busy ? 'Saving…' : template ? `Save interview (${score}/${interviewMaxScore(template.questions)})` : 'Save interview'}
+          {busy
+            ? 'Saving…'
+            : !template
+              ? 'Save interview'
+              : questionnaire
+                ? 'Save screening'
+                : `Save interview (${score}/${interviewMaxScore(template.questions)})`}
         </button>
         <button
           onClick={onCancel}

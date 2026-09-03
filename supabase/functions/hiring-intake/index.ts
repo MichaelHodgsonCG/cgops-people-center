@@ -50,6 +50,17 @@ const CONCEPT_BRAND: Record<string, string> = {
   'Wildcraft': 'Wildcraft',
 }
 
+// Management flow (Michael, 2026-09-03): the role decides the approval track
+// server-side — FOH managers vs BOH chefs. The client's word is not trusted.
+const MGMT_BOH_ROLES = ['Chef de Cuisine', 'Sous Chef']
+const MGMT_FOH_ROLES = [
+  'General Manager',
+  'Assistant General Manager',
+  'Guest Service Manager',
+  'Service Manager',
+  'Beverage Manager',
+]
+
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -100,7 +111,7 @@ Deno.serve(async (req: Request) => {
         .from('people_center_uniform_standards')
         .select('brand, audience, title, body, effective')
         .eq('active', true)
-        .in('audience', ['FOH', 'BOH', ''])
+        .in('audience', ['FOH', 'BOH', 'Management', ''])
         .order('brand'),
     ])
     if (locs.error || jds.error || uniforms.error) {
@@ -256,6 +267,16 @@ Deno.serve(async (req: Request) => {
   if (!['indeed', 'website', 'in_person', 'other'].includes(source)) {
     return json(422, { error: 'Unknown application source.' })
   }
+  const flow = application.flow === 'mgmt' ? 'mgmt' : 'tm'
+  // Track derives from the role SERVER-SIDE (approval routing depends on it).
+  const track =
+    flow === 'mgmt'
+      ? MGMT_BOH_ROLES.some((r) => desiredPosition.includes(r))
+        ? 'boh'
+        : MGMT_FOH_ROLES.some((r) => desiredPosition.includes(r))
+          ? 'foh'
+          : 'foh' // unknown mgmt role: FOH approvers by default; HQ can correct
+      : null
   const { data: loc } = await supabase
     .from('people_center_locations')
     .select('id, name')
@@ -307,6 +328,8 @@ Deno.serve(async (req: Request) => {
       location_name: loc.name,
       desired_position: desiredPosition,
       source,
+      flow,
+      track,
       status: 'submitted',
       complete: true,
       form,

@@ -87,7 +87,9 @@ export function InterviewsView({ session, profile, readOnly }: InterviewsViewPro
             >
               <span className="block">{t.name}</span>
               <span className={`block text-[11px] ${selectedId === t.id ? 'text-cg-orange/70' : 'text-charcoal/45'}`}>
-                {t.questions.length} questions · max {interviewMaxScore(t.questions)} pts · v{t.version}
+                {t.kind === 'questionnaire'
+                  ? `${t.questions.length} questions · screening · v${t.version}`
+                  : `${t.questions.length} questions · max ${interviewMaxScore(t.questions)} pts · v${t.version}`}
               </span>
             </button>
           ))}
@@ -114,8 +116,9 @@ export function InterviewsView({ session, profile, readOnly }: InterviewsViewPro
                 <div>
                   <h3 className="text-base font-semibold">{selected.name}</h3>
                   <p className="mt-0.5 text-xs text-charcoal/55">
-                    {selected.audience} · pass marks:{' '}
-                    {selected.thresholds.map((th) => `${th.label} min ${th.min}`).join(' · ')}
+                    {selected.kind === 'questionnaire'
+                      ? `${selected.audience} · screening questionnaire — answers recorded in the applicant's own words, no scoring`
+                      : `${selected.audience} · pass marks: ${selected.thresholds.map((th) => `${th.label} min ${th.min}`).join(' · ')}`}
                   </p>
                   <p className="mt-0.5 text-[11px] text-charcoal/45">
                     v{selected.version}
@@ -146,21 +149,23 @@ export function InterviewsView({ session, profile, readOnly }: InterviewsViewPro
                     <p className="text-sm font-medium">
                       {i + 1}. {q.prompt}
                     </p>
-                    <ul className="mt-1 space-y-0.5 pl-4 text-sm text-charcoal/75">
-                      {q.answers.map((a, j) => (
-                        <li key={j} className="flex items-baseline gap-2">
-                          <span className="shrink-0 text-[11px] font-medium text-charcoal/40">1</span> {a}
+                    {selected.kind !== 'questionnaire' && (
+                      <ul className="mt-1 space-y-0.5 pl-4 text-sm text-charcoal/75">
+                        {q.answers.map((a, j) => (
+                          <li key={j} className="flex items-baseline gap-2">
+                            <span className="shrink-0 text-[11px] font-medium text-charcoal/40">1</span> {a}
+                          </li>
+                        ))}
+                        <li className="flex items-baseline gap-2 text-charcoal/55">
+                          <span className="shrink-0 text-[11px] font-medium text-charcoal/40">1</span> Acceptable
+                          alternate response (please note)
                         </li>
-                      ))}
-                      <li className="flex items-baseline gap-2 text-charcoal/55">
-                        <span className="shrink-0 text-[11px] font-medium text-charcoal/40">1</span> Acceptable
-                        alternate response (please note)
-                      </li>
-                      <li className="flex items-baseline gap-2 text-charcoal/55">
-                        <span className="shrink-0 text-[11px] font-medium text-charcoal/40">0</span> Unacceptable
-                        response
-                      </li>
-                    </ul>
+                        <li className="flex items-baseline gap-2 text-charcoal/55">
+                          <span className="shrink-0 text-[11px] font-medium text-charcoal/40">0</span> Unacceptable
+                          response
+                        </li>
+                      </ul>
+                    )}
                   </li>
                 ))}
               </ol>
@@ -191,6 +196,9 @@ function TemplateForm({
   const [thresholds, setThresholds] = useState<InterviewThreshold[]>(tpl.thresholds)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  // Questionnaires (screening questions) have no creditable answers or pass
+  // marks — a question is just its prompt, answered in free text.
+  const questionnaire = tpl.kind === 'questionnaire'
 
   function updateQuestion(i: number, patch: Partial<{ prompt: string; answersText: string }>) {
     setQuestions((qs) => qs.map((q, j) => (j === i ? { ...q, ...patch } : q)))
@@ -205,7 +213,7 @@ function TemplateForm({
           .map((a) => a.trim())
           .filter(Boolean),
       }))
-      .filter((q) => q.prompt && q.answers.length > 0)
+      .filter((q) => q.prompt && (questionnaire || q.answers.length > 0))
     if (!name.trim() || parsed.length === 0) return
     setBusy(true)
     setErr(null)
@@ -276,15 +284,19 @@ function TemplateForm({
               placeholder="Question prompt…"
               className="mb-1.5 w-full rounded-md border border-surface-line bg-surface px-2 py-1.5 text-sm"
             />
-            <label className="mb-0.5 block text-[11px] text-charcoal/50">
-              Creditable answers — one per line, 1 point each (the alternate-response point is automatic)
-            </label>
-            <textarea
-              value={q.answersText}
-              onChange={(e) => updateQuestion(i, { answersText: e.target.value })}
-              rows={Math.max(3, q.answersText.split('\n').length)}
-              className="w-full rounded-md border border-surface-line bg-surface px-2 py-1.5 text-[13px] leading-relaxed"
-            />
+            {!questionnaire && (
+              <>
+                <label className="mb-0.5 block text-[11px] text-charcoal/50">
+                  Creditable answers — one per line, 1 point each (the alternate-response point is automatic)
+                </label>
+                <textarea
+                  value={q.answersText}
+                  onChange={(e) => updateQuestion(i, { answersText: e.target.value })}
+                  rows={Math.max(3, q.answersText.split('\n').length)}
+                  className="w-full rounded-md border border-surface-line bg-surface px-2 py-1.5 text-[13px] leading-relaxed"
+                />
+              </>
+            )}
           </div>
         ))}
       </div>
@@ -295,7 +307,7 @@ function TemplateForm({
         <Plus className="h-3.5 w-3.5" /> Add question
       </button>
 
-      <div className="mt-3">
+      <div className={`mt-3 ${questionnaire ? 'hidden' : ''}`}>
         <label className="mb-1 block text-[11px] uppercase tracking-wide text-charcoal/50">
           Pass marks (minimum score per role)
         </label>

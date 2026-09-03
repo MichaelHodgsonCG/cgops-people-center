@@ -90,6 +90,20 @@ const LEGACY_RESTAURANTS = [
   'Wildcraft Wherever',
 ]
 
+// Management flow (?flow=mgmt): a trimmed version of the same application for
+// manager candidates. Role names MUST match the intake function's
+// MGMT_BOH_ROLES / MGMT_FOH_ROLES lists — the server derives the FOH/BOH
+// track (and therefore who must approve the hire) from the role title.
+const MGMT_ROLES = [
+  { title: 'General Manager', track: 'FOH' },
+  { title: 'Assistant General Manager', track: 'FOH' },
+  { title: 'Guest Service Manager', track: 'FOH' },
+  { title: 'Service Manager', track: 'FOH' },
+  { title: 'Beverage Manager', track: 'FOH' },
+  { title: 'Chef de Cuisine', track: 'BOH' },
+  { title: 'Sous Chef', track: 'BOH' },
+] as const
+
 const DECLARATION =
   'I declare that I am qualified to perform all the duties of the position that I am seeking. I also declare that the information I have provided on this application is correct and that any false statements or omissions will justify my rejection or dismissal. I authorize the company to contact any of my previous employers as well as any reference source to verify the facts and information that I have furnished regarding my experience, qualifications and character. I authorize any person(s) having knowledge to provide such information in good faith. I authorize The Charcoal Group and its agents to verify any information related to my application or resume. I understand that my application will remain on file for 3 years in accordance with Employment Standards Legislation.'
 
@@ -131,6 +145,8 @@ const btnSmall =
 export function ApplyForm() {
   const params = useMemo(() => new URLSearchParams(window.location.search), [])
   const preview = params.get('preview') === '1'
+  const mgmt = params.get('flow') === 'mgmt'
+  const shellTitle = mgmt ? 'Management application' : 'Join our team'
 
   const [config, setConfig] = useState<Config | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -178,6 +194,7 @@ export function ApplyForm() {
 
   // Step 5 — availability & pay
   const [dateAvailable, setDateAvailable] = useState('')
+  const [minSalary, setMinSalary] = useState('') // mgmt: minimum annual salary
   const [employmentType, setEmploymentType] = useState('')
   const [seasonalPermanent, setSeasonalPermanent] = useState('')
   const [minPayHour, setMinPayHour] = useState('')
@@ -193,12 +210,13 @@ export function ApplyForm() {
   const [jobsTerminated, setJobsTerminated] = useState('')
   const [commitments, setCommitments] = useState('')
 
-  // Steps 6–7 — work history & references
+  // Steps 6–7 — work history & references (managers give 3 professional
+  // references, per the CG Mgmt Interview Process; TMs give 2 personal ones)
+  const minRefs = mgmt ? 3 : 2
   const [jobs, setJobs] = useState<Job[]>([emptyJob()])
-  const [refs, setRefs] = useState<Reference[]>([
-    { name: '', phone: '', years_known: '', relationship: '' },
-    { name: '', phone: '', years_known: '', relationship: '' },
-  ])
+  const [refs, setRefs] = useState<Reference[]>(
+    Array.from({ length: minRefs }, () => ({ name: '', phone: '', years_known: '', relationship: '' })),
+  )
 
   // Step 8 — how heard + declaration
   const [howHeard, setHowHeard] = useState('')
@@ -233,13 +251,18 @@ export function ApplyForm() {
     if (a.size === 0 && otherRole.trim()) a.add('FOH')
     return [...a]
   }, [selectedRoles, otherRole])
-  const uniformDocs = useMemo(
-    () =>
-      (config?.uniform_standards ?? []).filter(
-        (u) => u.brand === location?.brand && audiences.includes(u.audience),
-      ),
-    [config, location, audiences],
-  )
+  const uniformDocs = useMemo(() => {
+    const all = (config?.uniform_standards ?? []).filter((u) => u.brand === location?.brand)
+    if (mgmt) {
+      // Management-audience standard where the brand has one; otherwise the
+      // FOH/BOH standard for the role's side of the house.
+      const managementDocs = all.filter((u) => u.audience === 'Management')
+      if (managementDocs.length > 0) return managementDocs
+      const track = MGMT_ROLES.find((r) => r.title === roles[0])?.track ?? 'FOH'
+      return all.filter((u) => u.audience === track)
+    }
+    return all.filter((u) => audiences.includes(u.audience))
+  }, [config, location, audiences, mgmt, roles])
   const fullName = `${firstName.trim()} ${lastName.trim()}`.trim()
   const positionText = [...roles, otherRole.trim() ? `Other: ${otherRole.trim()}` : '']
     .filter(Boolean)
@@ -280,6 +303,10 @@ export function ApplyForm() {
     switch (step) {
       case 0:
         if (!locationId) return 'Please choose a restaurant.'
+        if (mgmt) {
+          if (roles.length === 0) return 'Please choose the management role you are applying for.'
+          return null
+        }
         if (roles.length === 0 && !otherRole.trim())
           return 'Please choose at least one position (or fill in Other).'
         return null
@@ -311,6 +338,11 @@ export function ApplyForm() {
         return null
       case 5:
         if (!dateAvailable) return 'Please tell us the date you are available for employment.'
+        if (mgmt) {
+          if (!minSalary.trim()) return 'Please tell us the minimum annual salary you need to make.'
+          if (!holidaysWeekends) return 'Please answer the holidays & weekends question.'
+          return null
+        }
         if (!employmentType) return 'Please choose part-time or full-time.'
         if (!seasonalPermanent) return 'Please choose seasonal or permanent.'
         if (!DAYS.some((d) => days[d].can)) return 'Please mark at least one day you can work.'
@@ -331,7 +363,8 @@ export function ApplyForm() {
       }
       case 7: {
         const complete = refs.filter((r) => r.name.trim() && r.phone.trim())
-        if (complete.length < 2) return 'Please provide at least two references with a name and phone number.'
+        if (complete.length < minRefs)
+          return `Please provide at least ${minRefs === 3 ? 'three' : 'two'} references with a name and phone number.`
         return null
       }
       case 8:
@@ -369,8 +402,9 @@ export function ApplyForm() {
         location_id: locationId,
         desired_position: positionText,
         source: params.get('source') === 'indeed' ? 'indeed' : 'website',
+        flow: mgmt ? 'mgmt' : 'tm',
         form: {
-          positions: [...roles, ...(otherRole.trim() ? [`Other: ${otherRole.trim()}`] : [])],
+          positions: mgmt ? roles : [...roles, ...(otherRole.trim() ? [`Other: ${otherRole.trim()}`] : [])],
           address: {
             street: street.trim(),
             apt: apt.trim(),
@@ -399,23 +433,33 @@ export function ApplyForm() {
             location: affiliatedWhere.trim(),
             manager: affiliatedManager.trim(),
           },
-          employment: {
-            date_available: dateAvailable,
-            type: employmentType,
-            seasonal_or_permanent: seasonalPermanent,
-            minimum_pay_per_hour: minPayHour.trim(),
-            minimum_pay_per_week: minPayWeek.trim(),
-          },
-          availability: {
-            days: Object.fromEntries(DAYS.filter((d) => days[d].can).map((d) => [d, { earliest: days[d].earliest, latest: days[d].latest }])),
-            holidays_and_weekends: holidaysWeekends,
-            flexible_for_training: trainingFlexible,
-            adequate_transportation: transportation,
-            has_job_to_keep: hasJobToKeep,
-            jobs_last_two_years: jobsLastTwoYears,
-            jobs_terminated_from: jobsTerminated,
-            commitments: commitments.trim(),
-          },
+          employment: mgmt
+            ? {
+                date_available: dateAvailable,
+                minimum_annual_salary: minSalary.trim(),
+              }
+            : {
+                date_available: dateAvailable,
+                type: employmentType,
+                seasonal_or_permanent: seasonalPermanent,
+                minimum_pay_per_hour: minPayHour.trim(),
+                minimum_pay_per_week: minPayWeek.trim(),
+              },
+          availability: mgmt
+            ? {
+                holidays_and_weekends: holidaysWeekends,
+                commitments: commitments.trim(),
+              }
+            : {
+                days: Object.fromEntries(DAYS.filter((d) => days[d].can).map((d) => [d, { earliest: days[d].earliest, latest: days[d].latest }])),
+                holidays_and_weekends: holidaysWeekends,
+                flexible_for_training: trainingFlexible,
+                adequate_transportation: transportation,
+                has_job_to_keep: hasJobToKeep,
+                jobs_last_two_years: jobsLastTwoYears,
+                jobs_terminated_from: jobsTerminated,
+                commitments: commitments.trim(),
+              },
           work_history: jobs.filter((j) => j.company.trim()),
           references: refs.filter((r) => r.name.trim()),
           how_heard: howHeard.trim(),
@@ -450,7 +494,7 @@ export function ApplyForm() {
 
   if (loadError) {
     return (
-      <Shell>
+      <Shell title={shellTitle}>
         <p className="rounded-xl border border-surface-line bg-surface px-4 py-8 text-center text-sm text-charcoal/70">
           {loadError}
         </p>
@@ -459,14 +503,14 @@ export function ApplyForm() {
   }
   if (!config) {
     return (
-      <Shell>
+      <Shell title={shellTitle}>
         <p className="py-16 text-center text-sm text-charcoal/50">Loading…</p>
       </Shell>
     )
   }
   if (done) {
     return (
-      <Shell>
+      <Shell title={shellTitle}>
         <div className="rounded-xl border border-surface-line bg-surface px-5 py-10 text-center">
           <p className="text-lg font-semibold">Application received — thank you, {firstName.trim()}!</p>
           <p className="mt-2 text-sm text-charcoal/65">
@@ -478,7 +522,7 @@ export function ApplyForm() {
   }
 
   return (
-    <Shell>
+    <Shell title={shellTitle}>
       <div ref={topRef} />
       {preview && (
         <p className="mb-4 rounded-md bg-warning/10 px-3 py-2 text-center text-xs font-medium text-warning">
@@ -501,10 +545,9 @@ export function ApplyForm() {
       {step === 0 && (
         <div className="space-y-4">
           <p className="text-sm text-charcoal/65">
-            Thanks for your interest in joining the Charcoal Group family. To be considered, this
-            application must be filled out completely — use N/A where a question doesn't apply.
-            Resumés are not accepted in place of completing this form. You may omit information
-            indicating legally protected details (ex: gender, religion, national origin, age, etc.).
+            {mgmt
+              ? 'Thanks for your interest in a management role with the Charcoal Group. To be considered, this application must be filled out completely — use N/A where a question doesn\'t apply. You may omit information indicating legally protected details (ex: gender, religion, national origin, age, etc.).'
+              : 'Thanks for your interest in joining the Charcoal Group family. To be considered, this application must be filled out completely — use N/A where a question doesn\'t apply. Resumés are not accepted in place of completing this form. You may omit information indicating legally protected details (ex: gender, religion, national origin, age, etc.).'}
           </p>
           <label className="block">
             <span className="mb-1 block text-sm font-medium">Which restaurant are you applying to?</span>
@@ -518,28 +561,45 @@ export function ApplyForm() {
               ))}
             </select>
           </label>
-          <div>
-            <span className="mb-1 block text-sm font-medium">
-              Which position(s) are you applying for? <span className="font-normal text-charcoal/50">Choose all that interest you.</span>
-            </span>
-            <div className="space-y-1">
-              {config.positions.map((p) => (
-                <label key={p.role_title} className="flex cursor-pointer items-center gap-2 rounded-md border border-surface-line bg-surface px-3 py-2 text-sm">
-                  <input type="checkbox" checked={roles.includes(p.role_title)} onChange={() => toggleRole(p.role_title)} />
-                  {p.role_title} <span className="text-xs text-charcoal/50">— {p.department}</span>
-                </label>
-              ))}
-              <div className="flex items-center gap-2 rounded-md border border-surface-line bg-surface px-3 py-2 text-sm">
-                <span className="shrink-0">Other:</span>
-                <input
-                  value={otherRole}
-                  onChange={(e) => setOtherRole(e.target.value)}
-                  placeholder="tell us what you're looking for"
-                  className="w-full border-0 bg-transparent text-sm focus:outline-none"
-                />
+          {mgmt ? (
+            <div>
+              <span className="mb-1 block text-sm font-medium">Which management role are you applying for?</span>
+              <div className="space-y-1">
+                {MGMT_ROLES.map((r) => (
+                  <label key={r.title} className="flex cursor-pointer items-center gap-2 rounded-md border border-surface-line bg-surface px-3 py-2 text-sm">
+                    <input type="radio" checked={roles[0] === r.title} onChange={() => setRoles([r.title])} />
+                    {r.title}{' '}
+                    <span className="text-xs text-charcoal/50">
+                      — {r.track === 'BOH' ? 'Kitchen' : 'Front of house'}
+                    </span>
+                  </label>
+                ))}
               </div>
             </div>
-          </div>
+          ) : (
+            <div>
+              <span className="mb-1 block text-sm font-medium">
+                Which position(s) are you applying for? <span className="font-normal text-charcoal/50">Choose all that interest you.</span>
+              </span>
+              <div className="space-y-1">
+                {config.positions.map((p) => (
+                  <label key={p.role_title} className="flex cursor-pointer items-center gap-2 rounded-md border border-surface-line bg-surface px-3 py-2 text-sm">
+                    <input type="checkbox" checked={roles.includes(p.role_title)} onChange={() => toggleRole(p.role_title)} />
+                    {p.role_title} <span className="text-xs text-charcoal/50">— {p.department}</span>
+                  </label>
+                ))}
+                <div className="flex items-center gap-2 rounded-md border border-surface-line bg-surface px-3 py-2 text-sm">
+                  <span className="shrink-0">Other:</span>
+                  <input
+                    value={otherRole}
+                    onChange={(e) => setOtherRole(e.target.value)}
+                    placeholder="tell us what you're looking for"
+                    className="w-full border-0 bg-transparent text-sm focus:outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -563,14 +623,16 @@ export function ApplyForm() {
             </>
           ) : (
             <p className="rounded-md border border-surface-line bg-surface px-4 py-4 text-sm text-charcoal/70">
-              There is no standard job description for the position you entered — the restaurant will
-              go over the role's duties with you.
+              {mgmt
+                ? "Management roles don't carry a standard posted job description — the responsibilities, expectations and compensation for the role are covered in detail through the interview process."
+                : "There is no standard job description for the position you entered — the restaurant will go over the role's duties with you."}
             </p>
           )}
           <label className="flex cursor-pointer items-start gap-2 text-sm">
             <input type="checkbox" checked={ackJd} onChange={() => setAckJd((v) => !v)} className="mt-0.5" />
-            I have read and understood the job description{selectedRoles.length > 1 ? 's' : ''} for the
-            position{selectedRoles.length > 1 ? 's' : ''} I am applying for.
+            {mgmt && selectedRoles.length === 0
+              ? 'I understand the role expectations will be covered through the interview process.'
+              : `I have read and understood the job description${selectedRoles.length > 1 ? 's' : ''} for the position${selectedRoles.length > 1 ? 's' : ''} I am applying for.`}
           </label>
         </div>
       )}
@@ -723,7 +785,40 @@ export function ApplyForm() {
         </div>
       )}
 
-      {step === 5 && (
+      {step === 5 && mgmt && (
+        <div className="space-y-5">
+          <label className="block">
+            <span className="mb-1 block text-sm font-medium">Date you are available for employment</span>
+            <input type="date" value={dateAvailable} onChange={(e) => setDateAvailable(e.target.value)} className={`${inputCls} max-w-60`} />
+          </label>
+          <div>
+            <span className="mb-1 block text-sm font-medium">
+              What is the minimum annual salary you need to make?
+            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-sm">$</span>
+              <input value={minSalary} onChange={(e) => setMinSalary(e.target.value)} placeholder="per year" className={`${inputCls} max-w-40`} />
+            </div>
+            <p className="mt-1 text-xs text-charcoal/50">
+              Note: a statement of desired salary does not guarantee we will be able to meet your request.
+            </p>
+          </div>
+          <YesNo
+            label="Our restaurants are open for lunch and dinner 364 days a year (closed on Christmas Day). As a manager, are you able to work holidays and weekends?"
+            value={holidaysWeekends}
+            onChange={setHolidaysWeekends}
+          />
+          <label className="block">
+            <span className="mb-1 block text-sm font-medium">
+              What commitments do you have, or do you anticipate, that may affect your schedule?
+              <span className="font-normal text-charcoal/50"> (optional)</span>
+            </span>
+            <textarea value={commitments} onChange={(e) => setCommitments(e.target.value)} rows={2} className={inputCls} />
+          </label>
+        </div>
+      )}
+
+      {step === 5 && !mgmt && (
         <div className="space-y-5">
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block">
@@ -905,14 +1000,15 @@ export function ApplyForm() {
       {step === 7 && (
         <div className="space-y-3">
           <p className="text-sm text-charcoal/65">
-            Please give us at least two personal references, other than immediate family — people who
-            know your work, like a past manager, coach, or teacher.
+            {mgmt
+              ? 'Please give us at least three professional references, other than immediate family — people who have managed you or worked closely with you and can speak to your leadership.'
+              : 'Please give us at least two personal references, other than immediate family — people who know your work, like a past manager, coach, or teacher.'}
           </p>
           {refs.map((r, i) => (
             <div key={i} className="rounded-md border border-surface-line bg-surface p-3">
               <div className="mb-1 flex items-center justify-between">
                 <span className="text-xs font-medium uppercase tracking-wide text-charcoal/50">Reference {i + 1}</span>
-                {refs.length > 2 && (
+                {refs.length > minRefs && (
                   <button onClick={() => setRefs((rs) => rs.filter((_, k) => k !== i))} className="text-xs text-charcoal/40 hover:text-danger">
                     Remove
                   </button>
@@ -944,11 +1040,20 @@ export function ApplyForm() {
             <ReviewRow label="Name" value={fullName} />
             <ReviewRow label="Address" value={[street, apt, city, province, postal].filter(Boolean).join(', ')} />
             <ReviewRow label="Contact" value={[email, dayPhone, eveningPhone].filter(Boolean).join(' · ')} />
-            <ReviewRow label="Available from" value={`${dateAvailable} · ${employmentType} · ${seasonalPermanent}`} />
-            <ReviewRow
-              label="Days"
-              value={DAYS.filter((d) => days[d].can).map((d) => `${d} ${days[d].earliest}–${days[d].latest}`).join(', ')}
-            />
+            {mgmt ? (
+              <ReviewRow
+                label="Available from"
+                value={`${dateAvailable}${minSalary.trim() ? ` · minimum $${minSalary.trim()}/year` : ''}`}
+              />
+            ) : (
+              <>
+                <ReviewRow label="Available from" value={`${dateAvailable} · ${employmentType} · ${seasonalPermanent}`} />
+                <ReviewRow
+                  label="Days"
+                  value={DAYS.filter((d) => days[d].can).map((d) => `${d} ${days[d].earliest}–${days[d].latest}`).join(', ')}
+                />
+              </>
+            )}
             <ReviewRow label="Work history" value={jobs.filter((j) => j.company.trim()).map((j) => j.company).join('; ')} />
             <ReviewRow label="References" value={refs.filter((r) => r.name.trim()).map((r) => r.name).join(', ')} />
             <ReviewRow label="Documents" value="Job description ✓ · Grooming & uniform standards ✓" />
@@ -1001,13 +1106,13 @@ export function ApplyForm() {
   )
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({ children, title = 'Join our team' }: { children: React.ReactNode; title?: string }) {
   return (
     <div className="min-h-screen bg-surface-muted px-4 py-6 text-charcoal sm:py-10">
       <div className="mx-auto w-full max-w-xl">
         <header className="mb-5 text-center">
           <p className="text-xs uppercase tracking-widest text-charcoal/45">Charcoal Group</p>
-          <h1 className="text-xl font-semibold">Join our team</h1>
+          <h1 className="text-xl font-semibold">{title}</h1>
         </header>
         <main className="rounded-2xl border border-surface-line bg-surface p-4 shadow-sm sm:p-6">{children}</main>
         <p className="mt-4 text-center text-[11px] leading-relaxed text-charcoal/40">

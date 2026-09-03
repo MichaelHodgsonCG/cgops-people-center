@@ -18,6 +18,16 @@ export type ApplicationStatus =
   | 'hired'
   | 'not_hired'
   | 'withdrawn'
+  // management flow stages (Michael's direction, 2026-09-03)
+  | 'culture_interview'
+  | 'financial_interview'
+  | 'tais'
+  | 'final_interview'
+  | 'approvals'
+  | 'offer'
+
+export type ApplicationFlow = 'tm' | 'mgmt'
+export type MgmtTrack = 'foh' | 'boh'
 
 export const STATUS_FLOW: ApplicationStatus[] = [
   'submitted',
@@ -25,6 +35,21 @@ export const STATUS_FLOW: ApplicationStatus[] = [
   'interview',
   'reference_check',
   'decision_pending',
+  'hired',
+  'not_hired',
+  'withdrawn',
+]
+
+export const MGMT_STATUS_FLOW: ApplicationStatus[] = [
+  'submitted',
+  'screening',
+  'culture_interview',
+  'reference_check',
+  'financial_interview',
+  'tais',
+  'final_interview',
+  'approvals',
+  'offer',
   'hired',
   'not_hired',
   'withdrawn',
@@ -40,6 +65,12 @@ export const STATUS_LABELS: Record<ApplicationStatus, string> = {
   hired: 'Hired',
   not_hired: 'Not hired',
   withdrawn: 'Withdrawn',
+  culture_interview: 'Culture interview',
+  financial_interview: 'Financial interview',
+  tais: 'TAIS',
+  final_interview: 'Final interview',
+  approvals: 'Approvals',
+  offer: 'Offer',
 }
 
 export interface ApplicationRow {
@@ -48,6 +79,8 @@ export interface ApplicationRow {
   location_name: string
   desired_position: string
   source: string
+  flow: ApplicationFlow
+  track: MgmtTrack | null
   status: ApplicationStatus
   complete: boolean
   submitted_at: string
@@ -61,7 +94,7 @@ export async function fetchApplications(): Promise<ApplicationRow[]> {
   const { data, error } = await supabase
     .from('people_center_applications')
     .select(
-      `id, applicant_id, location_name, desired_position, source, status, complete,
+      `id, applicant_id, location_name, desired_position, source, flow, track, status, complete,
        submitted_at, updated_at, retention_purge_after, form,
        applicant:people_center_applicants ( full_name, email, phone )`,
     )
@@ -83,10 +116,29 @@ export const PIPELINE_STAGES: ApplicationStatus[] = [
   'decision_pending',
 ]
 
+export const MGMT_PIPELINE_STAGES: ApplicationStatus[] = [
+  'submitted',
+  'screening',
+  'culture_interview',
+  'reference_check',
+  'financial_interview',
+  'tais',
+  'final_interview',
+  'approvals',
+  'offer',
+]
+
 export const TERMINAL_STATUSES: ApplicationStatus[] = ['hired', 'not_hired', 'withdrawn']
 
+export const pipelineFor = (app: ApplicationRow): ApplicationStatus[] =>
+  app.flow === 'mgmt' ? MGMT_PIPELINE_STAGES : PIPELINE_STAGES
+
+export const statusFlowFor = (app: ApplicationRow): ApplicationStatus[] =>
+  app.flow === 'mgmt' ? MGMT_STATUS_FLOW : STATUS_FLOW
+
 /** What moves this application forward, per stage — straight from the CG
- * hiring process. */
+ * hiring process (TM) and the Mgmt Interview Process + Michael's approval
+ * ruling (mgmt). */
 export const NEXT_ACTION: Partial<Record<ApplicationStatus, string>> = {
   submitted: 'Screen the application — review the answers, prior applications and any watch-list flag, then move to Screening.',
   screening: 'If they look right, contact the applicant and book the patterned interview.',
@@ -94,6 +146,21 @@ export const NEXT_ACTION: Partial<Record<ApplicationStatus, string>> = {
   reference_check: 'Complete at least 2 positive reference checks (Mgmt Hiring — Step 2 has the form), then move to Decision pending.',
   decision_pending: 'Make the decision and communicate it to the applicant within one week.',
 }
+
+export const MGMT_NEXT_ACTION: Partial<Record<ApplicationStatus, string>> = {
+  submitted: 'Review the application and any watch-list flag, then move to Screening — whoever contacts the applicant runs the screening questions.',
+  screening: 'Run the screening call and record the answers below (Chef Screening Questions for BOH). If it goes well, move to Culture interview.',
+  culture_interview: 'Run Step 1 — the Culture/Values Interview (guide in Mgmt Hiring). This or the financial interview must happen in person. Record notes, then request 3 professional references.',
+  reference_check: 'Step 2 — minimum 2 POSITIVE references, at least 1 self-sourced; search the candidate online. Record the outcome, then move on.',
+  financial_interview: 'Step 3 — send the Gourmet Haven case study + P&L in advance; use the tier for the role (GSM/SM/Sous · BM/AGM · GM/CDC) and record the interview below.',
+  tais: 'Step 4 — AGM/GM/CDC only ($350, via Corey Dalton). A TAIS red flag is a HARD STOP. Other roles: move straight on.',
+  final_interview: 'Step 5 — for AGM/GM/CDC this interview is held by the VP People, VP Ops, President or Corporate Chefs.',
+  approvals: 'Collect the required sign-offs below. All named approvers must approve before the offer.',
+  offer: 'Step 6 — prepare and present the offer (48-hour sign-back if they need time), then record the outcome.',
+}
+
+export const nextActionFor = (app: ApplicationRow): string | undefined =>
+  app.flow === 'mgmt' ? MGMT_NEXT_ACTION[app.status] : NEXT_ACTION[app.status]
 
 // --- Screening traffic light -------------------------------------------------
 // Derived FLAGS from the application's own answers (plus the watch-list
@@ -411,6 +478,87 @@ export async function saveJobDescription(
   )
 }
 
+// --- Management approvals ----------------------------------------------------
+// Michael's ruling (2026-09-03): Megan Stover + John Mackay approve all FOH
+// managers; Todd Clarmo + Michael Hodgson approve all BOH chefs. Required
+// approvers are data (people_center_mgmt_approvers); a signature can only be
+// written by the approver themselves — RLS enforces it, the UI just reflects
+// it. Approvals are immutable.
+
+export interface MgmtApprover {
+  track: MgmtTrack
+  person_id: string
+  person_name: string
+}
+
+export async function fetchMgmtApprovers(): Promise<MgmtApprover[]> {
+  const { data, error } = await supabase
+    .from('people_center_mgmt_approvers')
+    .select('track, person_id, person_name')
+    .order('person_name')
+  if (error) throw error
+  return (data as MgmtApprover[]) ?? []
+}
+
+export interface ApplicationApproval {
+  id: string
+  application_id: string
+  approver_person_id: string
+  approver_name: string
+  decision: 'approved' | 'rejected'
+  note: string
+  created_at: string
+}
+
+export async function fetchApprovals(applicationId: string): Promise<ApplicationApproval[]> {
+  const { data, error } = await supabase
+    .from('people_center_application_approvals')
+    .select('id, application_id, approver_person_id, approver_name, decision, note, created_at')
+    .eq('application_id', applicationId)
+    .order('created_at')
+  if (error) throw error
+  return (data as ApplicationApproval[]) ?? []
+}
+
+export async function recordApproval(
+  actor: Actor,
+  app: ApplicationRow,
+  decision: 'approved' | 'rejected',
+  note: string,
+): Promise<void> {
+  if (!actor.personId) throw new Error('Your login is not linked to a person record — approvals are personal.')
+  const { data, error } = await supabase
+    .from('people_center_application_approvals')
+    .insert({
+      application_id: app.id,
+      approver_person_id: actor.personId,
+      approver_name: actor.name,
+      decision,
+      note,
+    })
+    .select('id')
+  if (error) throw error
+  if (!data || data.length === 0) {
+    throw new Error('The database did not accept this approval — only the named approvers for this track can sign, and only for themselves.')
+  }
+  const { error: evErr } = await supabase.from('people_center_application_events').insert({
+    application_id: app.id,
+    event: `approval.${decision}`,
+    actor_person_id: actor.personId,
+    actor_name: actor.name,
+    detail: note,
+  })
+  if (evErr) throw evErr
+  await recordAudit(
+    actor,
+    'create',
+    'application_approval',
+    app.id,
+    app.applicant?.full_name ?? 'applicant',
+    `${decision === 'approved' ? 'Approved' : 'Rejected'} ${app.desired_position} candidate (${app.location_name})${note ? `: ${note}` : ''}`,
+  )
+}
+
 // --- Hiring watch list -------------------------------------------------------
 // The CG Black List (do not interview/hire/re-hire) + Grey List (proceed with
 // caution). Table access is admin/executive ONLY (RLS). Everyone else gets
@@ -709,10 +857,13 @@ export interface InterviewThreshold {
   min: number
 }
 
+export type TemplateKind = 'scored' | 'questionnaire'
+
 export interface InterviewTemplate {
   id: string
   name: string
   audience: string
+  kind: TemplateKind
   intro: string
   questions: InterviewQuestion[]
   thresholds: InterviewThreshold[]
@@ -731,16 +882,19 @@ export interface InterviewTemplateEdits {
   thresholds: InterviewThreshold[]
 }
 
-/** Per question, index-aligned with the template's questions. */
+/** Per question, index-aligned with the template's questions. Scored
+ * templates use picked/alt_*; questionnaires use text (free-form answer). */
 export interface InterviewAnswer {
   picked: number[] // indices into question.answers, 1 point each
   alt_credit: boolean // "acceptable alternate response" credited (1 point)
   alt_note: string
+  text?: string // questionnaire answer, in the applicant's own words
 }
 
 export interface TemplateSnapshot {
   name: string
   version: number
+  kind?: TemplateKind
   intro: string
   questions: InterviewQuestion[]
   thresholds: InterviewThreshold[]
@@ -772,7 +926,7 @@ export function interviewScore(answers: InterviewAnswer[]): number {
 export async function fetchInterviewTemplates(): Promise<InterviewTemplate[]> {
   const { data, error } = await supabase
     .from('people_center_interview_templates')
-    .select('id, name, audience, intro, questions, thresholds, source_file, version, active, updated_at, updated_by_name')
+    .select('id, name, audience, kind, intro, questions, thresholds, source_file, version, active, updated_at, updated_by_name')
     .order('name')
   if (error) throw error
   return (data as InterviewTemplate[]) ?? []
@@ -838,10 +992,11 @@ export async function recordApplicationInterview(
   answers: InterviewAnswer[],
   notes: string,
 ): Promise<void> {
-  const score = interviewScore(answers)
+  const score = template.kind === 'questionnaire' ? 0 : interviewScore(answers)
   const snapshot: TemplateSnapshot = {
     name: template.name,
     version: template.version,
+    kind: template.kind,
     intro: template.intro,
     questions: template.questions,
     thresholds: template.thresholds,
@@ -865,10 +1020,13 @@ export async function recordApplicationInterview(
   }
   const { error: evErr } = await supabase.from('people_center_application_events').insert({
     application_id: app.id,
-    event: 'interview.recorded',
+    event: template.kind === 'questionnaire' ? 'screening.recorded' : 'interview.recorded',
     actor_person_id: actor.personId,
     actor_name: actor.name,
-    detail: `${template.name} — score ${score}/${interviewMaxScore(template.questions)}`,
+    detail:
+      template.kind === 'questionnaire'
+        ? template.name
+        : `${template.name} — score ${score}/${interviewMaxScore(template.questions)}`,
   })
   if (evErr) throw evErr
   await recordAudit(
