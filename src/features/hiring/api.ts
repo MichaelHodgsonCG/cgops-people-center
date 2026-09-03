@@ -162,6 +162,51 @@ export const MGMT_NEXT_ACTION: Partial<Record<ApplicationStatus, string>> = {
 export const nextActionFor = (app: ApplicationRow): string | undefined =>
   app.flow === 'mgmt' ? MGMT_NEXT_ACTION[app.status] : NEXT_ACTION[app.status]
 
+/** Which hiring-guide documents (people_center_hiring_guides.sort) belong
+ * inside each management step of the guided workflow, so a manager reads the
+ * step's guide right on the candidate's profile. */
+export const STAGE_GUIDE_SORTS: Partial<Record<ApplicationStatus, number[]>> = {
+  culture_interview: [10],
+  reference_check: [20],
+  financial_interview: [30, 40, 50, 60],
+  tais: [70],
+  final_interview: [80],
+  offer: [90],
+}
+
+/** A dated, attributed note on one step of the workflow — stored as an
+ * application event (`note.<stage>`), so it lives in the same immutable
+ * history as stage moves and interviews. */
+export async function recordStageNote(
+  actor: Actor,
+  app: ApplicationRow,
+  stage: ApplicationStatus,
+  note: string,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from('people_center_application_events')
+    .insert({
+      application_id: app.id,
+      event: `note.${stage}`,
+      actor_person_id: actor.personId,
+      actor_name: actor.name,
+      detail: note,
+    })
+    .select('id')
+  if (error) throw error
+  if (!data || data.length === 0) {
+    throw new Error('The database did not accept this note — you are not the reviewer for this position.')
+  }
+  await recordAudit(
+    actor,
+    'create',
+    'application_note',
+    app.id,
+    app.applicant?.full_name ?? 'applicant',
+    `Note on ${STATUS_LABELS[stage]} (${app.desired_position} — ${app.location_name}): ${note}`,
+  )
+}
+
 // --- Screening traffic light -------------------------------------------------
 // Derived FLAGS from the application's own answers (plus the watch-list
 // check when the caller has it): red = stop and check before proceeding,

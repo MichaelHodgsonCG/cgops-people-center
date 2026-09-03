@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import { ExternalLink, FileText, Inbox, UserCog } from 'lucide-react'
+import { BookOpen, Check, ChevronDown, ChevronRight, ExternalLink, FileText, Inbox, UserCog } from 'lucide-react'
 import { actorFrom } from '../../lib/activity'
 import { errText } from '../../lib/errText'
 import { can, toPermissionUser } from '../../permissions'
@@ -18,14 +18,16 @@ import { InterviewSection } from './InterviewSection'
 import { fetchPeopleOptions, type PersonOption } from '../bench/api'
 import type { UserProfile } from '../../types'
 import {
+  MGMT_NEXT_ACTION,
   MGMT_STATUS_FLOW,
+  NEXT_ACTION,
+  STAGE_GUIDE_SORTS,
   STATUS_FLOW,
   STATUS_LABELS,
   TERMINAL_STATUSES,
   checkWatchlist,
   daysSince,
   isStale,
-  nextActionFor,
   pipelineFor,
   screenApplication,
   statusFlowFor,
@@ -33,11 +35,13 @@ import {
   fetchApplicationDetail,
   fetchApplications,
   fetchApprovals,
+  fetchHiringGuides,
   fetchHiringReviewers,
   fetchMgmtApprovers,
   fetchPriorApplications,
   fetchWatchlistEntriesByName,
   recordApproval,
+  recordStageNote,
   setApplicationStatus,
   setHiringReviewer,
   type ApplicationAck,
@@ -45,6 +49,7 @@ import {
   type ApplicationEvent,
   type ApplicationRow,
   type ApplicationStatus,
+  type HiringGuide,
   type HiringPosition,
   type HiringReviewer,
   type MgmtApprover,
@@ -104,6 +109,18 @@ export function ApplicationsView({ session, profile }: HiringPageProps) {
       .finally(() => setLoading(false))
   }
   useEffect(load, [])
+
+  // A stage move re-fetches and swaps the SAME application back into the open
+  // panel — the workflow stays open and the next step unfolds in place.
+  const refresh = async () => {
+    try {
+      const fresh = await fetchApplications()
+      setApps(fresh)
+      setSelected((prev) => (prev ? fresh.find((a) => a.id === prev.id) ?? null : null))
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
 
   const visible = useMemo(() => {
     if (statusFilter === 'all') return apps
@@ -242,10 +259,7 @@ export function ApplicationsView({ session, profile }: HiringPageProps) {
           app={selected}
           actor={actor}
           onClose={() => setSelected(null)}
-          onChanged={() => {
-            load()
-            setSelected(null)
-          }}
+          onChanged={() => void refresh()}
         />
       )}
     </div>
@@ -500,47 +514,13 @@ function FormDetails({ form }: { form: Record<string, unknown> }) {
 
 // The application's path through the hiring process as a phase tracker:
 // each stage a dot on the line, the current one live, terminal outcome at
-// the end, updated-ago with a stale flag, and the next action per the CG
-// hiring process.
-function StageTracker({
-  app,
-  actor,
-  onChanged,
-  advanceBlock,
-}: {
-  app: ApplicationRow
-  actor: ReturnType<typeof actorFrom>
-  onChanged: () => void
-  /** When set, the one-click advance is disabled and this reason is shown
-   * (mgmt approvals gate: all named approvers must approve first). */
-  advanceBlock?: string | null
-}) {
+// the end, updated-ago with a stale flag. Display-only — the work happens
+// in the guided steps below.
+function StageTracker({ app }: { app: ApplicationRow }) {
   const stages = pipelineFor(app)
-  const nextAction = nextActionFor(app)
   const terminal = TERMINAL_STATUSES.includes(app.status)
   const currentIdx = terminal ? stages.length : stages.indexOf(app.status)
   const stale = isStale(app)
-  // One-click advance to the next pipeline stage; the final move (to an
-  // outcome) stays a deliberate choice in the Move stage box below.
-  const nextStage =
-    !terminal && currentIdx >= 0 && currentIdx < stages.length - 1
-      ? stages[currentIdx + 1]
-      : null
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-
-  async function advance() {
-    if (!nextStage) return
-    setBusy(true)
-    setErr(null)
-    try {
-      await setApplicationStatus(actor, app, nextStage, '')
-      onChanged()
-    } catch (e) {
-      setErr(errText(e))
-      setBusy(false)
-    }
-  }
   return (
     <section className="mb-3 rounded-xl border border-surface-line p-3">
       <div className="flex items-start gap-0">
@@ -603,25 +583,6 @@ function StageTracker({
           </span>
         )}
       </div>
-      {nextAction && (
-        <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 rounded-md bg-cg-orange-soft/40 px-2.5 py-1.5">
-          <p className="min-w-0 flex-1 text-xs text-charcoal/75">
-            <span className="font-medium text-cg-orange">Next:</span> {nextAction}
-          </p>
-          {nextStage && (
-            <button
-              onClick={() => void advance()}
-              disabled={busy || Boolean(advanceBlock)}
-              title={advanceBlock ?? undefined}
-              className="shrink-0 rounded-md bg-cg-orange px-2.5 py-1 text-xs font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
-            >
-              {busy ? 'Moving…' : `Move to ${STATUS_LABELS[nextStage]} →`}
-            </button>
-          )}
-        </div>
-      )}
-      {advanceBlock && <p className="mt-1 text-xs font-medium text-danger">{advanceBlock}</p>}
-      {err && <p className="mt-1 text-xs text-danger">{err}</p>}
     </section>
   )
 }
@@ -649,12 +610,23 @@ function ApplicationPanel({
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
+  const [guides, setGuides] = useState<HiringGuide[]>([])
+
   const loadApprovals = () => {
     if (app.flow !== 'mgmt') return
     fetchMgmtApprovers().then(setApprovers).catch(() => setApprovers([]))
     fetchApprovals(app.id).then(setApprovals).catch(() => setApprovals([]))
   }
   useEffect(loadApprovals, [app.id, app.flow])
+
+  useEffect(() => {
+    // The step guides live in the mgmt hiring process document set.
+    if (app.flow === 'mgmt') fetchHiringGuides().then(setGuides).catch(() => setGuides([]))
+  }, [app.flow])
+
+  // The row can be swapped for a fresh copy after a stage move — keep the
+  // manual mover's select in step with reality.
+  useEffect(() => setNextStatus(app.status), [app.status])
 
   // Michael's accountability gate: every named approver for this track must
   // have approved before the application can advance past Approvals.
@@ -672,13 +644,17 @@ function ApplicationPanel({
       ? 'All named approvers must approve (below) before this moves to Offer.'
       : null
 
-  useEffect(() => {
+  const loadDetail = () => {
     fetchApplicationDetail(app.id)
       .then((d) => {
         setAcks(d.acks)
         setEvents(d.events)
       })
       .catch((e: Error) => setErr(e.message))
+  }
+
+  useEffect(() => {
+    loadDetail()
     fetchPriorApplications(app.applicant_id, app.id).then(setPrior).catch(() => setPrior([]))
     // Watch-list check: the RPC tells anyone WHICH list matched (never the
     // notes); the table read returns the notes only to admin/executive (RLS).
@@ -687,7 +663,8 @@ function ApplicationPanel({
       checkWatchlist(nm).then(setWatch).catch(() => setWatch([]))
       fetchWatchlistEntriesByName(nm).then(setWatchNotes).catch(() => setWatchNotes([]))
     }
-  }, [app.id, app.applicant_id, app.applicant?.full_name])
+    // app.updated_at: a stage move swaps in a fresh row — reload the history.
+  }, [app.id, app.updated_at, app.applicant_id, app.applicant?.full_name])
 
   async function saveStatus() {
     if (nextStatus === app.status) return
@@ -732,7 +709,7 @@ function ApplicationPanel({
           </span>
         </div>
 
-        <StageTracker app={app} actor={actor} onChanged={onChanged} advanceBlock={approvalsGate} />
+        <StageTracker app={app} />
 
         <ScreeningCard app={app} watch={watch} watchNotes={watchNotes} />
 
@@ -774,17 +751,19 @@ function ApplicationPanel({
           )}
         </section>
 
-        <InterviewSection app={app} actor={actor} />
-
-        {app.flow === 'mgmt' && (
-          <ApprovalsSection
-            app={app}
-            actor={actor}
-            required={requiredApprovers}
-            approvals={approvals}
-            onRecorded={loadApprovals}
-          />
-        )}
+        <WorkflowSteps
+          app={app}
+          actor={actor}
+          events={events}
+          guides={guides}
+          requiredApprovers={requiredApprovers}
+          approvals={approvals}
+          allApproved={allApproved}
+          approvalsGate={approvalsGate}
+          onApprovalsChanged={loadApprovals}
+          onChanged={onChanged}
+          onNoted={loadDetail}
+        />
 
         <section className="mb-3 rounded-xl border border-surface-line p-3">
           <h4 className="mb-2 text-xs font-medium uppercase tracking-wide text-charcoal/50">Move stage</h4>
@@ -815,8 +794,8 @@ function ApplicationPanel({
             </button>
           </div>
           <p className="mt-2 text-[11px] text-charcoal/50">
-            Reference checks and the one-week decision-communication clock arrive later in Phase 2 —
-            every move is recorded in the history below.
+            For corrections and outcomes outside the guided steps (e.g. Withdrawn, or moving back a
+            stage) — every move is recorded in the history below.
           </p>
           {err && <p className="mt-1 text-xs text-danger">{err}</p>}
         </section>
@@ -837,6 +816,305 @@ function ApplicationPanel({
         </section>
       </aside>
     </>
+  )
+}
+
+// The guided workflow: every pipeline stage is a step card in a vertical
+// checklist. Done steps carry a check, the current step opens automatically
+// with everything the manager needs INSIDE it — the step's guide, the
+// recording tool for that step (screening questionnaire, patterned
+// interview, sign-offs) and a notes box — plus a "Complete step" button that
+// moves the application on and unfolds the next step in place. Steps ahead
+// can be opened and read but not actioned. Everything is stored as they go,
+// so a manager can leave mid-process and pick up exactly where they were.
+// The same component runs both flows; only the stages and guides differ.
+
+function StepNotes({
+  app,
+  actor,
+  stage,
+  events,
+  canWrite,
+  onNoted,
+}: {
+  app: ApplicationRow
+  actor: ReturnType<typeof actorFrom>
+  stage: ApplicationStatus
+  events: ApplicationEvent[]
+  canWrite: boolean
+  onNoted: () => void
+}) {
+  const notes = events.filter((ev) => ev.event === `note.${stage}`)
+  const [txt, setTxt] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  async function save() {
+    if (!txt.trim()) return
+    setBusy(true)
+    setErr(null)
+    try {
+      await recordStageNote(actor, app, stage, txt.trim())
+      setTxt('')
+      onNoted()
+    } catch (e) {
+      setErr(errText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (notes.length === 0 && !canWrite) return null
+  return (
+    <div className="mt-2">
+      {notes.length > 0 && (
+        <ul className="mb-1.5 space-y-1">
+          {notes.map((n, i) => (
+            <li key={i} className="rounded-md bg-surface-muted/60 px-2.5 py-1.5 text-xs">
+              <span className="whitespace-pre-wrap text-charcoal/80">{n.detail}</span>
+              <span className="mt-0.5 block text-[10px] text-charcoal/45">
+                {n.actor_name} · {fmt(n.created_at)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {canWrite && (
+        <div className="flex items-start gap-2">
+          <textarea
+            value={txt}
+            onChange={(e) => setTxt(e.target.value)}
+            rows={txt.includes('\n') ? 3 : 1}
+            placeholder="Add a note for this step…"
+            className="min-w-0 flex-1 rounded-md border border-surface-line bg-surface px-2 py-1.5 text-xs"
+          />
+          <button
+            onClick={() => void save()}
+            disabled={busy || !txt.trim()}
+            className="shrink-0 rounded-md border border-surface-line px-2.5 py-1.5 text-xs font-medium hover:bg-surface-muted disabled:opacity-50"
+          >
+            {busy ? 'Saving…' : 'Save note'}
+          </button>
+        </div>
+      )}
+      {err && <p className="mt-1 text-xs text-danger">{err}</p>}
+    </div>
+  )
+}
+
+function StepGuide({ guide }: { guide: HiringGuide }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="mt-1.5 rounded-md border border-surface-line bg-surface">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-xs font-medium text-charcoal/75 hover:bg-surface-muted/60"
+      >
+        {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
+        <BookOpen className="h-3.5 w-3.5 shrink-0 text-cg-orange" />
+        <span className="min-w-0">
+          {guide.title}
+          {guide.subtitle && <span className="block font-normal text-charcoal/50">{guide.subtitle}</span>}
+        </span>
+      </button>
+      {open && (
+        <div className="whitespace-pre-wrap border-t border-surface-line px-3 py-2 text-xs leading-relaxed text-charcoal/75">
+          {guide.body}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function WorkflowSteps({
+  app,
+  actor,
+  events,
+  guides,
+  requiredApprovers,
+  approvals,
+  allApproved,
+  approvalsGate,
+  onApprovalsChanged,
+  onChanged,
+  onNoted,
+}: {
+  app: ApplicationRow
+  actor: ReturnType<typeof actorFrom>
+  events: ApplicationEvent[]
+  guides: HiringGuide[]
+  requiredApprovers: MgmtApprover[]
+  approvals: ApplicationApproval[]
+  allApproved: boolean
+  approvalsGate: string | null
+  onApprovalsChanged: () => void
+  onChanged: () => void
+  onNoted: () => void
+}) {
+  const stages = pipelineFor(app)
+  const terminal = TERMINAL_STATUSES.includes(app.status)
+  const currentIdx = terminal ? stages.length : stages.indexOf(app.status)
+  const guidance = app.flow === 'mgmt' ? MGMT_NEXT_ACTION : NEXT_ACTION
+  const [expanded, setExpanded] = useState<Record<string, boolean>>(() => ({ [app.status]: true }))
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  // When a step completes, the fresh row arrives with the next status —
+  // unfold the newly-current step so the workflow carries the manager forward.
+  useEffect(() => {
+    setExpanded((e) => ({ ...e, [app.status]: true }))
+  }, [app.status])
+
+  async function moveTo(status: ApplicationStatus) {
+    setBusy(true)
+    setErr(null)
+    try {
+      await setApplicationStatus(actor, app, status, '')
+      onChanged()
+    } catch (e) {
+      setErr(errText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="mb-3 rounded-xl border border-surface-line p-3">
+      <h4 className="mb-2 text-xs font-medium uppercase tracking-wide text-charcoal/50">
+        Guided workflow
+      </h4>
+      <ol className="space-y-1.5">
+        {stages.map((s, i) => {
+          const state = terminal || i < currentIdx ? 'done' : i === currentIdx ? 'current' : 'upcoming'
+          const open = !!expanded[s]
+          const isLast = i === stages.length - 1
+          const nextStage = isLast ? null : stages[i + 1]
+          const stepGuides =
+            app.flow === 'mgmt'
+              ? guides.filter((g) => (STAGE_GUIDE_SORTS[s] ?? []).includes(g.sort))
+              : []
+          const showInterviews =
+            (app.flow === 'mgmt' && s === 'screening') || (app.flow === 'tm' && s === 'interview')
+          const showApprovals = app.flow === 'mgmt' && s === 'approvals'
+          // Recording tools stay live on done steps too (a late addition to
+          // the record is legitimate); upcoming steps are read-only.
+          const actionable = state !== 'upcoming'
+          const blocked = s === 'approvals' ? approvalsGate : null
+          const hiredBlocked = app.flow === 'mgmt' && !allApproved
+          return (
+            <li key={s} className={`rounded-lg border ${state === 'current' ? 'border-cg-orange/60' : 'border-surface-line'}`}>
+              <button
+                onClick={() => setExpanded((e) => ({ ...e, [s]: !e[s] }))}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-muted/40"
+              >
+                <span
+                  className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${
+                    state === 'done'
+                      ? 'bg-cg-orange text-white'
+                      : state === 'current'
+                        ? 'border-2 border-cg-orange text-cg-orange'
+                        : 'border border-surface-line text-charcoal/40'
+                  }`}
+                >
+                  {state === 'done' ? <Check className="h-3 w-3" /> : i + 1}
+                </span>
+                <span className={`min-w-0 flex-1 font-medium ${state === 'upcoming' ? 'text-charcoal/45' : ''}`}>
+                  {STATUS_LABELS[s]}
+                </span>
+                {state === 'current' && (
+                  <span className="shrink-0 rounded-full bg-cg-orange-soft px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-cg-orange">
+                    You are here
+                  </span>
+                )}
+                {open ? <ChevronDown className="h-4 w-4 shrink-0 text-charcoal/40" /> : <ChevronRight className="h-4 w-4 shrink-0 text-charcoal/40" />}
+              </button>
+              {open && (
+                <div className="border-t border-surface-line px-3 py-2.5">
+                  {guidance[s] && <p className="text-xs text-charcoal/70">{guidance[s]}</p>}
+                  {stepGuides.map((g) => (
+                    <StepGuide key={g.id} guide={g} />
+                  ))}
+                  {showInterviews && actionable && (
+                    <InterviewSection
+                      app={app}
+                      actor={actor}
+                      bare
+                      kinds={app.flow === 'mgmt' ? ['questionnaire'] : ['scored']}
+                      title={app.flow === 'mgmt' ? 'Screening call record' : 'Patterned interview'}
+                    />
+                  )}
+                  {showApprovals && actionable && (
+                    <div className="mt-2">
+                      <ApprovalsSection
+                        app={app}
+                        actor={actor}
+                        required={requiredApprovers}
+                        approvals={approvals}
+                        onRecorded={onApprovalsChanged}
+                      />
+                    </div>
+                  )}
+                  <StepNotes
+                    app={app}
+                    actor={actor}
+                    stage={s}
+                    events={events}
+                    canWrite={actionable}
+                    onNoted={onNoted}
+                  />
+                  {state === 'current' && !isLast && (
+                    <div className="mt-2.5 border-t border-surface-line pt-2">
+                      <button
+                        onClick={() => nextStage && void moveTo(nextStage)}
+                        disabled={busy || Boolean(blocked)}
+                        title={blocked ?? undefined}
+                        className="rounded-md bg-cg-orange px-3 py-1.5 text-xs font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
+                      >
+                        {busy ? 'Moving…' : `Complete step → ${nextStage ? STATUS_LABELS[nextStage] : ''}`}
+                      </button>
+                      {blocked && <p className="mt-1 text-xs font-medium text-danger">{blocked}</p>}
+                    </div>
+                  )}
+                  {state === 'current' && isLast && (
+                    <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-surface-line pt-2">
+                      <button
+                        onClick={() => void moveTo('hired')}
+                        disabled={busy || hiredBlocked}
+                        title={hiredBlocked ? 'All named approvers must approve first.' : undefined}
+                        className="rounded-md bg-success px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+                      >
+                        Mark Hired
+                      </button>
+                      <button
+                        onClick={() => void moveTo('not_hired')}
+                        disabled={busy}
+                        className="rounded-md border border-surface-line px-3 py-1.5 text-xs font-medium hover:bg-surface-muted disabled:opacity-50"
+                      >
+                        Not hired
+                      </button>
+                      <button
+                        onClick={() => void moveTo('withdrawn')}
+                        disabled={busy}
+                        className="rounded-md border border-surface-line px-3 py-1.5 text-xs font-medium text-charcoal/60 hover:bg-surface-muted disabled:opacity-50"
+                      >
+                        Withdrawn
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </li>
+          )
+        })}
+      </ol>
+      {terminal && (
+        <p className="mt-2 rounded-md bg-surface-muted/60 px-2.5 py-1.5 text-xs text-charcoal/60">
+          Outcome: <span className="font-medium">{STATUS_LABELS[app.status]}</span> — the record is
+          complete. Use Move stage below to reopen if that was a mistake.
+        </p>
+      )}
+      {err && <p className="mt-1.5 text-xs text-danger">{err}</p>}
+    </section>
   )
 }
 
@@ -885,7 +1163,7 @@ function ApprovalsSection({
   }
 
   return (
-    <section className="mb-3 rounded-xl border border-surface-line p-3">
+    <section className="rounded-xl border border-surface-line p-3">
       <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-charcoal/50">
         Sign-offs — required for all {trackLabel}
       </h4>

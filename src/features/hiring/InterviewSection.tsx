@@ -20,12 +20,29 @@ import {
   type ApplicationRow,
   type InterviewAnswer,
   type InterviewTemplate,
+  type TemplateKind,
 } from './api'
 
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
 
-export function InterviewSection({ app, actor }: { app: ApplicationRow; actor: Actor }) {
+export function InterviewSection({
+  app,
+  actor,
+  kinds,
+  bare,
+  title,
+}: {
+  app: ApplicationRow
+  actor: Actor
+  /** Limit to these template kinds (both the templates offered and the
+   * records shown) — the guided workflow mounts the questionnaire recorder in
+   * the screening step and the scored recorder in the interview step. */
+  kinds?: TemplateKind[]
+  /** Render without the outer bordered section — for embedding in a step card. */
+  bare?: boolean
+  title?: string
+}) {
   const [interviews, setInterviews] = useState<ApplicationInterview[]>([])
   const [templates, setTemplates] = useState<InterviewTemplate[]>([])
   const [recording, setRecording] = useState(false)
@@ -43,30 +60,37 @@ export function InterviewSection({ app, actor }: { app: ApplicationRow; actor: A
       .catch(() => setTemplates([]))
   }, [app.flow])
 
-  return (
-    <section className="mb-3 rounded-xl border border-surface-line p-3">
+  // Legacy records predate template.kind in the snapshot — they were all scored.
+  const visibleInterviews = kinds
+    ? interviews.filter((iv) => kinds.includes(iv.template.kind ?? 'scored'))
+    : interviews
+  const visibleTemplates = kinds ? templates.filter((t) => kinds.includes(t.kind)) : templates
+  const noun = kinds?.length === 1 && kinds[0] === 'questionnaire' ? 'screening' : 'interview'
+
+  const content = (
+    <>
       <div className="mb-2 flex items-center justify-between">
         <h4 className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-charcoal/50">
-          <ClipboardCheck className="h-3.5 w-3.5" /> Patterned interviews
+          <ClipboardCheck className="h-3.5 w-3.5" /> {title ?? 'Patterned interviews'}
         </h4>
-        {!recording && templates.length > 0 && (
+        {!recording && visibleTemplates.length > 0 && (
           <button
             onClick={() => setRecording(true)}
             className="rounded-md border border-surface-line px-2.5 py-1 text-xs font-medium hover:bg-surface-muted"
           >
-            Record interview
+            Record {noun}
           </button>
         )}
       </div>
 
       {err && <p className="mb-2 text-xs text-danger">{err}</p>}
 
-      {interviews.length === 0 && !recording && (
-        <p className="text-xs text-charcoal/55">No interview recorded yet.</p>
+      {visibleInterviews.length === 0 && !recording && (
+        <p className="text-xs text-charcoal/55">No {noun} recorded yet.</p>
       )}
 
       <ul className="space-y-1.5">
-        {interviews.map((iv) => (
+        {visibleInterviews.map((iv) => (
           <RecordedInterview key={iv.id} iv={iv} />
         ))}
       </ul>
@@ -75,7 +99,7 @@ export function InterviewSection({ app, actor }: { app: ApplicationRow; actor: A
         <InterviewRecorder
           app={app}
           actor={actor}
-          templates={templates}
+          templates={visibleTemplates}
           onDone={() => {
             setRecording(false)
             load()
@@ -83,7 +107,13 @@ export function InterviewSection({ app, actor }: { app: ApplicationRow; actor: A
           onCancel={() => setRecording(false)}
         />
       )}
-    </section>
+    </>
+  )
+
+  return bare ? (
+    <div className="mt-2">{content}</div>
+  ) : (
+    <section className="mb-3 rounded-xl border border-surface-line p-3">{content}</section>
   )
 }
 
