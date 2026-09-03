@@ -1,5 +1,13 @@
 # Project Log
 
+## [2026-09-03] Pipeline Speed tracker (admin-only)
+
+**Shipped:** Admin Center gains a Pipeline Speed page, per Michael's efficiency ask: time between steps for every candidate and per-manager pace, read entirely from the workflow's existing stage-move events (no new writes, no schema change). Managers table shows moves made and the median/average/longest wait each person closes, fastest first. Candidates list puts open applications first with the longest current wait on top; each row expands to a stage-by-stage breakdown (time in every stage + who moved it on). Summary cards: open count, average time to outcome, longest current wait. Pace colours match house thresholds (<2d green, ≥7d red = the stale threshold). Verified the aggregation against SQL on the live events (10 moves, Michael's demo pace ~40min avg). Vercel production READY (e9b3032).
+**Roadmap:** Hiring analytics -> v1 complete (admin-only).
+**Decisions:** Admin-only for now, Michael verbatim: "Keep it admin for now but eventually this info can go to Execs/ROLS" — the gate is one resource check in the nav entry + one in the view, deliberately trivial to widen when he says so.
+**Blockers:** none.
+**Next:** Widen Pipeline Speed to Execs/ROLs on Michael's word; note the manager column shows whatever name the mover's events carry (Michael's demo moves show his email — real users with linked profiles show their names).
+
 ## [2026-09-03] Guided step-by-step workflow on every candidate profile
 
 **Shipped:** The application panel is now a guided checklist, per Michael's direction: every pipeline stage is a step card — done steps checked off, the current step open automatically with everything the manager needs inside it (the step's guidance, the full mgmt guide documents expandable in place — culture, references, financial tiers + Gourmet Haven case study, TAIS, final interview, offer — the recording tool that belongs to the step: screening questionnaire in mgmt Screening, scored patterned interview in TM Interview, personal sign-offs in Approvals, plus dated/attributed step notes stored as application events). Completing a step moves the application on and unfolds the next step in place — the panel stays open across stage moves, so a manager can come and go and always land where they left off. Steps ahead are readable but not actionable. Final step offers Hired / Not hired / Withdrawn (mgmt Hired still gated behind all sign-offs). Stage tracker kept as display-only overview; Move stage box kept as the correction escape hatch. Same component both flows. Deployed: Vercel production READY (dca48f0).
