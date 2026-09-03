@@ -1,5 +1,13 @@
 # Project Log
 
+## [2026-09-03] Approvals one-of-two; watch list admin-held with open reporting; interview hard fail
+
+**Shipped:** Three rulings from Michael, live. (1) Manager approvals are one-OR-the-other: FOH needs Megan Stover or John Mackay, BOH needs Todd Clarmo or Michael Hodgson — the Offer gate now takes ONE approval from the track's named approvers (signatures stay personal + immutable; UI copy and guidance updated). (2) Watch list: full list moved to Admin Center, admin-only end to end (migration 20260903220000 — select/update/delete admin only, executive read removed); new submit-only "Report to Watch List" page in Hiring lets any hiring role add a name without reading a row back; any name match on an application is now a YELLOW flag with one generic message — "check with admin before proceeding" — never which list, never the notes. (3) Patterned interviews: Unacceptable response leads every answer list (recorder + guide viewer), and one unacceptable answer (rude/racial/sexist/inappropriate) FAILS the whole interview regardless of score — red fail banner while recording, FAIL badge replacing pass marks on the record, event/audit say FAILED. Vercel production READY (e737409).
+**Roadmap:** Hiring governance -> tightened per rulings.
+**Decisions:** All three above are Michael's verbatim directions of 2026-09-03. Casey Testfield's demo flag correctly downgrades red→yellow under the new watch-list rule.
+**Blockers:** none.
+**Next:** Standing asks unchanged.
+
 ## [2026-09-03] Step logistics as structured fields; workflow tailors to the role
 
 **Shipped:** (1) The remaining workbook fill-ins are structured fields on the guided workflow (migration 20260903210000: one updatable row per application+stage, reviewer-writable, audited): Where? (In person/Zoom) on the culture, financial and final interview steps; TAIS link; Where? + Signed back? on Offer. The workbook's in-person rule is enforced visually — if both the culture and financial interviews are marked Zoom, a red warning appears on both steps. (2) Role tailoring per Michael's ask: the financial step shows only the tier matching the role being interviewed for (GSM/SM/Sous · BM/AGM · GM/CDC; case study + P&L always shown), the other tiers behind a one-click "hidden — open if the role changes" reveal; the TAIS step tells non-AGM/GM/CDC candidates it is not required and tucks its guide away the same way. Nothing deleted — a role change brings the right content back automatically since everything derives from desired_position. Vercel production READY (0de2453).
