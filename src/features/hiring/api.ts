@@ -174,6 +174,103 @@ export const STAGE_GUIDE_SORTS: Partial<Record<ApplicationStatus, number[]>> = {
   offer: [90],
 }
 
+// Role tiering — the process differs by the role being interviewed for:
+// the financial interview has three tiers, and TAIS is AGM/GM/CDC only.
+// The workflow shows the applicable tier and tucks the others away (still
+// reachable, in case the role changes mid-process).
+
+/** desired_position → the hiring-guide sort of the matching financial tier. */
+export const FINANCIAL_TIER_SORT: Record<string, number> = {
+  'Guest Service Manager': 30,
+  'Service Manager': 30,
+  'Sous Chef': 30,
+  'Beverage Manager': 40,
+  'Assistant General Manager': 40,
+  'General Manager': 50,
+  'Chef de Cuisine': 50,
+}
+export const FINANCIAL_TIER_SORTS = [30, 40, 50]
+
+export const TAIS_ROLES = ['Assistant General Manager', 'General Manager', 'Chef de Cuisine']
+
+// --- Step logistics ----------------------------------------------------------
+// The small fill-ins from the CG Mgmt Interview Process tabs, as structured
+// fields (Michael, 2026-09-03): Where (In person / Zoom) on the culture,
+// financial and final interviews, the TAIS link, and the offer's Signed
+// back?. One updatable row per (application, stage); every save audited.
+
+export interface StepFieldDef {
+  key: string
+  label: string
+  kind: 'select' | 'text'
+  options?: string[]
+  placeholder?: string
+}
+
+export const STEP_FIELDS: Partial<Record<ApplicationStatus, StepFieldDef[]>> = {
+  culture_interview: [{ key: 'where', label: 'Where?', kind: 'select', options: ['In person', 'Zoom'] }],
+  financial_interview: [{ key: 'where', label: 'Where?', kind: 'select', options: ['In person', 'Zoom'] }],
+  final_interview: [{ key: 'where', label: 'Where?', kind: 'select', options: ['In person', 'Zoom'] }],
+  tais: [{ key: 'tais_link', label: 'TAIS link', kind: 'text', placeholder: 'Link to the TAIS report…' }],
+  offer: [
+    { key: 'where', label: 'Where?', kind: 'select', options: ['In person', 'Zoom'] },
+    { key: 'signed_back', label: 'Signed back?', kind: 'select', options: ['Yes', 'No'] },
+  ],
+}
+
+export type StepDetailsMap = Record<string, Record<string, string>>
+
+export async function fetchStepDetails(applicationId: string): Promise<StepDetailsMap> {
+  const { data, error } = await supabase
+    .from('people_center_step_details')
+    .select('stage, details')
+    .eq('application_id', applicationId)
+  if (error) throw error
+  const map: StepDetailsMap = {}
+  for (const row of (data as { stage: string; details: Record<string, string> }[]) ?? []) {
+    map[row.stage] = row.details ?? {}
+  }
+  return map
+}
+
+export async function saveStepDetails(
+  actor: Actor,
+  app: ApplicationRow,
+  stage: ApplicationStatus,
+  details: Record<string, string>,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from('people_center_step_details')
+    .upsert(
+      {
+        application_id: app.id,
+        stage,
+        details,
+        updated_at: new Date().toISOString(),
+        updated_by: actor.personId,
+        updated_by_name: actor.name,
+      },
+      { onConflict: 'application_id,stage' },
+    )
+    .select('stage')
+  if (error) throw error
+  if (!data || data.length === 0) {
+    throw new Error('The database did not accept this change — you are not the reviewer for this position.')
+  }
+  const summary = Object.entries(details)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+    .join(' · ')
+  await recordAudit(
+    actor,
+    'update',
+    'application_step',
+    app.id,
+    app.applicant?.full_name ?? 'applicant',
+    `${STATUS_LABELS[stage]} details (${app.desired_position} — ${app.location_name}): ${summary || 'cleared'}`,
+  )
+}
+
 /** A dated, attributed note on one step of the workflow — stored as an
  * application event (`note.<stage>`), so it lives in the same immutable
  * history as stage moves and interviews. */

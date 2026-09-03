@@ -19,11 +19,15 @@ import { ReferenceSection } from './ReferenceSection'
 import { fetchPeopleOptions, type PersonOption } from '../bench/api'
 import type { UserProfile } from '../../types'
 import {
+  FINANCIAL_TIER_SORT,
+  FINANCIAL_TIER_SORTS,
   MGMT_NEXT_ACTION,
   MGMT_STATUS_FLOW,
   NEXT_ACTION,
   STAGE_GUIDE_SORTS,
   STATUS_FLOW,
+  STEP_FIELDS,
+  TAIS_ROLES,
   STATUS_LABELS,
   TERMINAL_STATUSES,
   checkWatchlist,
@@ -40,9 +44,11 @@ import {
   fetchHiringReviewers,
   fetchMgmtApprovers,
   fetchPriorApplications,
+  fetchStepDetails,
   fetchWatchlistEntriesByName,
   recordApproval,
   recordStageNote,
+  saveStepDetails,
   setApplicationStatus,
   setHiringReviewer,
   type ApplicationAck,
@@ -54,6 +60,7 @@ import {
   type HiringPosition,
   type HiringReviewer,
   type MgmtApprover,
+  type StepDetailsMap,
   type WatchlistEntry,
   type WatchlistMatch,
 } from './api'
@@ -903,6 +910,102 @@ function StepNotes({
   )
 }
 
+// The structured fill-ins from the process tabs (Where?, TAIS link, Signed
+// back?) — small fields saved per step, updatable as logistics change.
+function StepLogistics({
+  app,
+  actor,
+  stage,
+  details,
+  onSaved,
+}: {
+  app: ApplicationRow
+  actor: ReturnType<typeof actorFrom>
+  stage: ApplicationStatus
+  details: Record<string, string>
+  onSaved: () => void
+}) {
+  const defs = STEP_FIELDS[stage] ?? []
+  const [vals, setVals] = useState<Record<string, string>>(details)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => setVals(details), [details])
+  const dirty = defs.some((d) => (vals[d.key] ?? '') !== (details[d.key] ?? ''))
+
+  async function save() {
+    setBusy(true)
+    setErr(null)
+    try {
+      await saveStepDetails(actor, app, stage, vals)
+      onSaved()
+    } catch (e) {
+      setErr(errText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (defs.length === 0) return null
+  return (
+    <div className="mt-2 flex flex-wrap items-end gap-2 rounded-md border border-surface-line bg-surface px-2.5 py-2">
+      {defs.map((d) => (
+        <label key={d.key} className="block">
+          <span className="mb-0.5 block text-[10px] uppercase tracking-wide text-charcoal/50">{d.label}</span>
+          {d.kind === 'select' ? (
+            <select
+              value={vals[d.key] ?? ''}
+              onChange={(e) => setVals((v) => ({ ...v, [d.key]: e.target.value }))}
+              className="rounded-md border border-surface-line bg-surface px-2 py-1 text-xs"
+            >
+              <option value="">—</option>
+              {(d.options ?? []).map((o) => (
+                <option key={o} value={o}>
+                  {o}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              value={vals[d.key] ?? ''}
+              onChange={(e) => setVals((v) => ({ ...v, [d.key]: e.target.value }))}
+              placeholder={d.placeholder}
+              className="min-w-56 rounded-md border border-surface-line bg-surface px-2 py-1 text-xs"
+            />
+          )}
+        </label>
+      ))}
+      {dirty && (
+        <button
+          onClick={() => void save()}
+          disabled={busy}
+          className="rounded-md bg-cg-orange px-2.5 py-1 text-xs font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
+        >
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+      )}
+      {err && <p className="w-full text-xs text-danger">{err}</p>}
+    </div>
+  )
+}
+
+// Guides that don't apply to this candidate's role, tucked away but one
+// click from coming back — the role can change mid-process.
+function HiddenGuides({ label, guides }: { label: string; guides: HiringGuide[] }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="mt-1.5">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1 text-[11px] text-charcoal/45 hover:text-charcoal/70"
+      >
+        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        {label}
+      </button>
+      {open && guides.map((g) => <StepGuide key={g.id} guide={g} />)}
+    </div>
+  )
+}
+
 function StepGuide({ guide }: { guide: HiringGuide }) {
   const [open, setOpen] = useState(false)
   return (
@@ -959,6 +1062,18 @@ function WorkflowSteps({
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => ({ [app.status]: true }))
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [stepDetails, setStepDetails] = useState<StepDetailsMap>({})
+
+  const loadStepDetails = () => {
+    fetchStepDetails(app.id).then(setStepDetails).catch(() => setStepDetails({}))
+  }
+  useEffect(loadStepDetails, [app.id])
+
+  // Process rule from the workbook: the culture interview OR the financial
+  // interview must happen in person. Both marked Zoom breaks it.
+  const bothZoom =
+    stepDetails.culture_interview?.where === 'Zoom' &&
+    stepDetails.financial_interview?.where === 'Zoom'
 
   // When a step completes, the fresh row arrives with the next status —
   // unfold the newly-current step so the workflow carries the manager forward.
@@ -990,10 +1105,25 @@ function WorkflowSteps({
           const open = !!expanded[s]
           const isLast = i === stages.length - 1
           const nextStage = isLast ? null : stages[i + 1]
-          const stepGuides =
+          const allStepGuides =
             app.flow === 'mgmt'
               ? guides.filter((g) => (STAGE_GUIDE_SORTS[s] ?? []).includes(g.sort))
               : []
+          // Role tiering: the financial step shows only the tier for the role
+          // being interviewed for; the other tiers hide behind a reveal (the
+          // role can change mid-process). TAIS applies to AGM/GM/CDC only.
+          const tierSort =
+            s === 'financial_interview' && app.flow === 'mgmt'
+              ? FINANCIAL_TIER_SORT[app.desired_position]
+              : undefined
+          const stepGuides = tierSort
+            ? allStepGuides.filter((g) => !FINANCIAL_TIER_SORTS.includes(g.sort) || g.sort === tierSort)
+            : allStepGuides
+          const hiddenTierGuides = tierSort
+            ? allStepGuides.filter((g) => FINANCIAL_TIER_SORTS.includes(g.sort) && g.sort !== tierSort)
+            : []
+          const taisNotRequired =
+            s === 'tais' && app.flow === 'mgmt' && !TAIS_ROLES.includes(app.desired_position)
           const showInterviews =
             (app.flow === 'mgmt' && s === 'screening') || (app.flow === 'tm' && s === 'interview')
           const showApprovals = app.flow === 'mgmt' && s === 'approvals'
@@ -1032,9 +1162,48 @@ function WorkflowSteps({
               {open && (
                 <div className="border-t border-surface-line px-3 py-2.5">
                   {guidance[s] && <p className="text-xs text-charcoal/70">{guidance[s]}</p>}
-                  {stepGuides.map((g) => (
-                    <StepGuide key={g.id} guide={g} />
-                  ))}
+                  {taisNotRequired && (
+                    <p className="mt-1.5 rounded-md bg-surface-muted/60 px-2.5 py-1.5 text-xs text-charcoal/60">
+                      TAIS is for AGM / GM / CDC only — not required for a{' '}
+                      <span className="font-medium">{app.desired_position}</span>. Complete the step
+                      to move on.
+                    </p>
+                  )}
+                  {(s === 'culture_interview' || s === 'financial_interview') && bothZoom && (
+                    <p className="mt-1.5 rounded-md bg-danger/10 px-2.5 py-1.5 text-xs font-medium text-danger">
+                      Process rule: the culture interview or the financial interview must happen in
+                      person — both are currently marked Zoom.
+                    </p>
+                  )}
+                  {taisNotRequired ? (
+                    allStepGuides.length > 0 && (
+                      <HiddenGuides
+                        label={`TAIS guide hidden — not required for a ${app.desired_position}. Open if the role changes.`}
+                        guides={allStepGuides}
+                      />
+                    )
+                  ) : (
+                    <>
+                      {stepGuides.map((g) => (
+                        <StepGuide key={g.id} guide={g} />
+                      ))}
+                      {hiddenTierGuides.length > 0 && (
+                        <HiddenGuides
+                          label={`Other role tiers hidden — this candidate is interviewing for ${app.desired_position}. Open if the role changes.`}
+                          guides={hiddenTierGuides}
+                        />
+                      )}
+                    </>
+                  )}
+                  {STEP_FIELDS[s] && actionable && !taisNotRequired && (
+                    <StepLogistics
+                      app={app}
+                      actor={actor}
+                      stage={s}
+                      details={stepDetails[s] ?? {}}
+                      onSaved={loadStepDetails}
+                    />
+                  )}
                   {showInterviews && actionable && (
                     <InterviewSection
                       app={app}
