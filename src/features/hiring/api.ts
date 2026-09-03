@@ -51,6 +51,7 @@ export interface ApplicationRow {
   status: ApplicationStatus
   complete: boolean
   submitted_at: string
+  updated_at: string
   retention_purge_after: string
   form: Record<string, unknown>
   applicant: { full_name: string; email: string | null; phone: string | null } | null
@@ -61,12 +62,47 @@ export async function fetchApplications(): Promise<ApplicationRow[]> {
     .from('people_center_applications')
     .select(
       `id, applicant_id, location_name, desired_position, source, status, complete,
-       submitted_at, retention_purge_after, form,
+       submitted_at, updated_at, retention_purge_after, form,
        applicant:people_center_applicants ( full_name, email, phone )`,
     )
     .order('submitted_at', { ascending: false })
   if (error) throw error
   return ((data as unknown as ApplicationRow[]) ?? [])
+}
+
+// --- Pipeline presentation ---------------------------------------------------
+// The application's path through the TM hiring process, shown as a phase
+// tracker (pattern borrowed from Michael's roadmap boards: stages, a live
+// status chip, updated-ago with a stale flag, and the next action).
+
+export const PIPELINE_STAGES: ApplicationStatus[] = [
+  'submitted',
+  'screening',
+  'interview',
+  'reference_check',
+  'decision_pending',
+]
+
+export const TERMINAL_STATUSES: ApplicationStatus[] = ['hired', 'not_hired', 'withdrawn']
+
+/** What moves this application forward, per stage — straight from the CG
+ * hiring process. */
+export const NEXT_ACTION: Partial<Record<ApplicationStatus, string>> = {
+  submitted: 'Screen the application — review the answers, prior applications and any watch-list flag, then move to Screening.',
+  screening: 'If they look right, contact the applicant and book the patterned interview.',
+  interview: 'Record the patterned interview below, then move to Reference check.',
+  reference_check: 'Complete at least 2 positive reference checks (Mgmt Hiring — Step 2 has the form), then move to Decision pending.',
+  decision_pending: 'Make the decision and communicate it to the applicant within one week.',
+}
+
+export const STALE_AFTER_DAYS = 7
+
+export function daysSince(iso: string): number {
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
+}
+
+export function isStale(app: ApplicationRow): boolean {
+  return !TERMINAL_STATUSES.includes(app.status) && daysSince(app.updated_at) >= STALE_AFTER_DAYS
 }
 
 export interface ApplicationAck {

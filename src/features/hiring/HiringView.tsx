@@ -18,9 +18,14 @@ import { InterviewSection } from './InterviewSection'
 import { fetchPeopleOptions, type PersonOption } from '../bench/api'
 import type { UserProfile } from '../../types'
 import {
+  NEXT_ACTION,
+  PIPELINE_STAGES,
   STATUS_FLOW,
   STATUS_LABELS,
+  TERMINAL_STATUSES,
   checkWatchlist,
+  daysSince,
+  isStale,
   fetchAllPositions,
   fetchApplicationDetail,
   fetchApplications,
@@ -53,6 +58,11 @@ const STATUS_CLASS: Record<string, string> = {
 
 const fmt = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+
+const ago = (iso: string) => {
+  const d = daysSince(iso)
+  return d <= 0 ? 'today' : d === 1 ? '1d ago' : `${d}d ago`
+}
 
 interface HiringPageProps {
   session: Session
@@ -153,6 +163,7 @@ export function ApplicationsView({ session, profile }: HiringPageProps) {
                 <th className="px-4 py-3 font-medium">Submitted</th>
                 <th className="px-4 py-3 font-medium">Source</th>
                 <th className="px-4 py-3 font-medium">Stage</th>
+                <th className="px-4 py-3 font-medium">Updated</th>
               </tr>
             </thead>
             <tbody>
@@ -174,6 +185,14 @@ export function ApplicationsView({ session, profile }: HiringPageProps) {
                       {STATUS_LABELS[a.status]}
                     </span>
                   </td>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-xs text-charcoal/60">
+                    {ago(a.updated_at)}
+                    {isStale(a) && (
+                      <span className="ml-1.5 rounded-full bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning">
+                        stale
+                      </span>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -193,6 +212,85 @@ export function ApplicationsView({ session, profile }: HiringPageProps) {
         />
       )}
     </div>
+  )
+}
+
+// The application's path through the hiring process as a phase tracker:
+// each stage a dot on the line, the current one live, terminal outcome at
+// the end, updated-ago with a stale flag, and the next action per the CG
+// hiring process.
+function StageTracker({ app }: { app: ApplicationRow }) {
+  const terminal = TERMINAL_STATUSES.includes(app.status)
+  const currentIdx = terminal ? PIPELINE_STAGES.length : PIPELINE_STAGES.indexOf(app.status)
+  const stale = isStale(app)
+  return (
+    <section className="mb-3 rounded-xl border border-surface-line p-3">
+      <div className="flex items-start gap-0">
+        {PIPELINE_STAGES.map((s, i) => {
+          const state = terminal || i < currentIdx ? 'done' : i === currentIdx ? 'current' : 'upcoming'
+          return (
+            <div key={s} className="flex min-w-0 flex-1 flex-col items-center">
+              <div className="flex w-full items-center">
+                <div className={`h-0.5 flex-1 ${i === 0 ? 'bg-transparent' : state === 'upcoming' ? 'bg-surface-line' : 'bg-cg-orange'}`} />
+                <div
+                  className={`h-3 w-3 shrink-0 rounded-full border-2 ${
+                    state === 'done'
+                      ? 'border-cg-orange bg-cg-orange'
+                      : state === 'current'
+                        ? 'border-cg-orange bg-surface'
+                        : 'border-surface-line bg-surface'
+                  }`}
+                />
+                <div
+                  className={`h-0.5 flex-1 ${
+                    i === PIPELINE_STAGES.length - 1
+                      ? terminal
+                        ? 'bg-cg-orange'
+                        : 'bg-transparent'
+                      : (terminal || i < currentIdx)
+                        ? 'bg-cg-orange'
+                        : 'bg-surface-line'
+                  }`}
+                />
+              </div>
+              <span
+                className={`mt-1 w-full truncate px-0.5 text-center text-[10px] leading-tight ${
+                  state === 'current' ? 'font-semibold text-cg-orange' : state === 'done' ? 'text-charcoal/60' : 'text-charcoal/35'
+                }`}
+                title={STATUS_LABELS[s]}
+              >
+                {STATUS_LABELS[s]}
+              </span>
+            </div>
+          )
+        })}
+        <div className="flex min-w-0 flex-1 flex-col items-center">
+          <div className="flex w-full items-center">
+            <div className={`h-0.5 flex-1 ${terminal ? 'bg-cg-orange' : 'bg-surface-line'}`} />
+            <div className={`h-3 w-3 shrink-0 rounded-full border-2 ${terminal ? 'border-cg-orange bg-cg-orange' : 'border-surface-line bg-surface'}`} />
+            <div className="h-0.5 flex-1 bg-transparent" />
+          </div>
+          <span className={`mt-1 w-full truncate px-0.5 text-center text-[10px] leading-tight ${terminal ? 'font-semibold text-cg-orange' : 'text-charcoal/35'}`}>
+            {terminal ? STATUS_LABELS[app.status] : 'Outcome'}
+          </span>
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-charcoal/55">
+        <span>
+          Updated {ago(app.updated_at)} · in this process since {new Date(app.submitted_at).toLocaleDateString()}
+        </span>
+        {stale && (
+          <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-medium text-warning">
+            stale — no movement in {daysSince(app.updated_at)} days
+          </span>
+        )}
+      </div>
+      {NEXT_ACTION[app.status] && (
+        <p className="mt-1.5 rounded-md bg-cg-orange-soft/40 px-2.5 py-1.5 text-xs text-charcoal/75">
+          <span className="font-medium text-cg-orange">Next:</span> {NEXT_ACTION[app.status]}
+        </p>
+      )}
+    </section>
   )
 }
 
@@ -266,6 +364,8 @@ function ApplicationPanel({
             {STATUS_LABELS[app.status]}
           </span>
         </div>
+
+        <StageTracker app={app} />
 
         {watch.length > 0 && (
           <div
