@@ -17,6 +17,7 @@ import {
   ChevronsRight,
   ClipboardCheck,
   Database,
+  Gauge,
   HelpCircle,
   Map,
   ScrollText,
@@ -39,6 +40,7 @@ import { JobDescriptionsView } from '../hiring/JobDescriptionsView'
 import { UniformsView } from '../hiring/UniformsView'
 import { InterviewsView } from '../hiring/InterviewsView'
 import { MgmtProcessView } from '../hiring/MgmtProcessView'
+import { VelocityView } from '../hiring/VelocityView'
 
 // Lazy for the same reason as before the relocation: the sync pipeline (and
 // its xlsx parser) only loads when an admin opens Data Sources.
@@ -54,6 +56,7 @@ type AdminPage =
   | 'uniforms'
   | 'interviews'
   | 'mgmt_process'
+  | 'velocity'
   | 'activity'
   | 'data_sources'
 
@@ -67,6 +70,9 @@ const NAV: { page: AdminPage; label: string; icon: LucideIcon; resource: Resourc
   { page: 'uniforms', label: 'Uniforms', icon: Shirt, resource: 'hiring' },
   { page: 'interviews', label: 'Interviews', icon: ClipboardCheck, resource: 'hiring' },
   { page: 'mgmt_process', label: 'Mgmt Hiring', icon: Briefcase, resource: 'hiring' },
+  // Admin-only for now (Michael, 2026-09-03) — when he opens Pipeline Speed
+  // to Execs/ROLs, this resource and the view's own gate both widen.
+  { page: 'velocity', label: 'Pipeline Speed', icon: Gauge, resource: 'admin_area' },
   { page: 'activity', label: 'Activity Log', icon: ScrollText, resource: 'admin_area' },
   { page: 'data_sources', label: 'Data Sources', icon: Database, resource: 'data_sources' },
 ]
@@ -185,6 +191,8 @@ export function AdminShell({ session, profile, profileError, onReturn }: AdminSh
             <InterviewsView session={session} profile={profile} />
           ) : page === 'mgmt_process' ? (
             <MgmtProcessView session={session} profile={profile} />
+          ) : page === 'velocity' ? (
+            <VelocityView session={session} profile={profile} />
           ) : page === 'activity' ? (
             <ActivityLogView session={session} profile={profile} />
           ) : (

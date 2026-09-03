@@ -604,6 +604,29 @@ export async function recordApproval(
   )
 }
 
+// --- Pipeline speed ----------------------------------------------------------
+// Every stage move across every application, for the Admin Center's Pipeline
+// Speed tracker: time-between-steps per candidate, and per-manager pace
+// (each stage.<status> event closes the previous stage; the mover took that
+// long). RLS scopes rows — an admin sees everything.
+
+export interface StageMoveEvent {
+  application_id: string
+  event: string
+  actor_name: string
+  created_at: string
+}
+
+export async function fetchAllStageEvents(): Promise<StageMoveEvent[]> {
+  const { data, error } = await supabase
+    .from('people_center_application_events')
+    .select('application_id, event, actor_name, created_at')
+    .like('event', 'stage.%')
+    .order('created_at')
+  if (error) throw error
+  return (data as StageMoveEvent[]) ?? []
+}
+
 // --- Hiring watch list -------------------------------------------------------
 // The CG Black List (do not interview/hire/re-hire) + Grey List (proceed with
 // caution). Table access is admin/executive ONLY (RLS). Everyone else gets
