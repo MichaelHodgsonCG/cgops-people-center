@@ -79,6 +79,17 @@ const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
 const AFFILIATED =
   "Moose Winooski's, Charcoal Steak House, Martini's, dels, The Bauer Kitchen, The Bauer Bakery, Wildcraft, Wildcraft Wherever, Beertown Public House, Sociable Kitchen + Tavern, Solé"
 
+// Past employment can be at restaurants that no longer appear in the current
+// location list, so the affiliated-history picker offers these too.
+const LEGACY_RESTAURANTS = [
+  "Moose Winooski's",
+  'Charcoal Steak House',
+  "Martini's",
+  'dels',
+  'The Bauer Bakery',
+  'Wildcraft Wherever',
+]
+
 const DECLARATION =
   'I declare that I am qualified to perform all the duties of the position that I am seeking. I also declare that the information I have provided on this application is correct and that any false statements or omissions will justify my rejection or dismissal. I authorize the company to contact any of my previous employers as well as any reference source to verify the facts and information that I have furnished regarding my experience, qualifications and character. I authorize any person(s) having knowledge to provide such information in good faith. I authorize The Charcoal Group and its agents to verify any information related to my application or resume. I understand that my application will remain on file for 3 years in accordance with Employment Standards Legislation.'
 
@@ -160,8 +171,10 @@ export function ApplyForm() {
   const [smartServeNo, setSmartServeNo] = useState('')
   const [essentialFunctions, setEssentialFunctions] = useState('')
   const [everAffiliated, setEverAffiliated] = useState('')
-  const [affiliatedWhere, setAffiliatedWhere] = useState('')
+  const [affiliatedPick, setAffiliatedPick] = useState('') // select value ('' | name | '__other__')
+  const [affiliatedOther, setAffiliatedOther] = useState('')
   const [affiliatedManager, setAffiliatedManager] = useState('')
+  const affiliatedWhere = affiliatedPick === '__other__' ? affiliatedOther : affiliatedPick
 
   // Step 5 — availability & pay
   const [dateAvailable, setDateAvailable] = useState('')
@@ -681,8 +694,29 @@ export function ApplyForm() {
             />
             {everAffiliated === 'Yes' && (
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                <input value={affiliatedWhere} onChange={(e) => setAffiliatedWhere(e.target.value)} placeholder="Which location?" className={inputCls} />
+                <select value={affiliatedPick} onChange={(e) => setAffiliatedPick(e.target.value)} className={inputCls}>
+                  <option value="">— which restaurant? —</option>
+                  {config.locations.map((l) => (
+                    <option key={l.id} value={l.name}>
+                      {l.name}
+                    </option>
+                  ))}
+                  {LEGACY_RESTAURANTS.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                  <option value="__other__">Other / no longer open…</option>
+                </select>
                 <input value={affiliatedManager} onChange={(e) => setAffiliatedManager(e.target.value)} placeholder="Manager's name" className={inputCls} />
+                {affiliatedPick === '__other__' && (
+                  <input
+                    value={affiliatedOther}
+                    onChange={(e) => setAffiliatedOther(e.target.value)}
+                    placeholder="Tell us which restaurant"
+                    className={inputCls}
+                  />
+                )}
               </div>
             )}
           </div>
