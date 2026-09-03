@@ -151,6 +151,12 @@ export function InterviewsView({ session, profile, readOnly }: InterviewsViewPro
                     </p>
                     {selected.kind !== 'questionnaire' && (
                       <ul className="mt-1 space-y-0.5 pl-4 text-sm text-charcoal/75">
+                        {/* Unacceptable leads every list (Michael, 2026-09-03):
+                            one such answer fails the whole interview. */}
+                        <li className="flex items-baseline gap-2 font-medium text-danger">
+                          <span className="shrink-0 text-[11px]">⛔</span> Unacceptable response
+                          (rude, discriminatory, inappropriate) — fails the whole interview
+                        </li>
                         {q.answers.map((a, j) => (
                           <li key={j} className="flex items-baseline gap-2">
                             <span className="shrink-0 text-[11px] font-medium text-charcoal/40">1</span> {a}
@@ -159,10 +165,6 @@ export function InterviewsView({ session, profile, readOnly }: InterviewsViewPro
                         <li className="flex items-baseline gap-2 text-charcoal/55">
                           <span className="shrink-0 text-[11px] font-medium text-charcoal/40">1</span> Acceptable
                           alternate response (please note)
-                        </li>
-                        <li className="flex items-baseline gap-2 text-charcoal/55">
-                          <span className="shrink-0 text-[11px] font-medium text-charcoal/40">0</span> Unacceptable
-                          response
                         </li>
                       </ul>
                     )}

@@ -636,20 +636,21 @@ function ApplicationPanel({
   // manual mover's select in step with reality.
   useEffect(() => setNextStatus(app.status), [app.status])
 
-  // Michael's accountability gate: every named approver for this track must
-  // have approved before the application can advance past Approvals.
+  // Michael's accountability gate (updated 2026-09-03: "it can be one or the
+  // other"): ONE of the named approvers for this track must have approved
+  // before the application can advance past Approvals.
   const requiredApprovers = useMemo(
     () => approvers.filter((a) => a.track === app.track),
     [approvers, app.track],
   )
-  const allApproved =
+  const trackApproved =
     requiredApprovers.length > 0 &&
-    requiredApprovers.every((r) =>
+    requiredApprovers.some((r) =>
       approvals.some((x) => x.approver_person_id === r.person_id && x.decision === 'approved'),
     )
   const approvalsGate =
-    app.flow === 'mgmt' && app.status === 'approvals' && !allApproved
-      ? 'All named approvers must approve (below) before this moves to Offer.'
+    app.flow === 'mgmt' && app.status === 'approvals' && !trackApproved
+      ? 'One of the named approvers must approve (below) before this moves to Offer.'
       : null
 
   const loadDetail = () => {
@@ -680,10 +681,10 @@ function ApplicationPanel({
     // an Offer (or Hired) needs every named approver's sign-off first.
     if (
       app.flow === 'mgmt' &&
-      !allApproved &&
+      !trackApproved &&
       ['offer', 'hired'].includes(nextStatus)
     ) {
-      setErr('All named approvers must approve before this application can move to Offer or Hired.')
+      setErr('One of the named approvers must approve before this application can move to Offer or Hired.')
       return
     }
     setBusy(true)
@@ -766,7 +767,7 @@ function ApplicationPanel({
           guides={guides}
           requiredApprovers={requiredApprovers}
           approvals={approvals}
-          allApproved={allApproved}
+          trackApproved={trackApproved}
           approvalsGate={approvalsGate}
           onApprovalsChanged={loadApprovals}
           onChanged={onChanged}
@@ -1037,7 +1038,7 @@ function WorkflowSteps({
   guides,
   requiredApprovers,
   approvals,
-  allApproved,
+  trackApproved,
   approvalsGate,
   onApprovalsChanged,
   onChanged,
@@ -1049,7 +1050,7 @@ function WorkflowSteps({
   guides: HiringGuide[]
   requiredApprovers: MgmtApprover[]
   approvals: ApplicationApproval[]
-  allApproved: boolean
+  trackApproved: boolean
   approvalsGate: string | null
   onApprovalsChanged: () => void
   onChanged: () => void
@@ -1131,7 +1132,7 @@ function WorkflowSteps({
           // the record is legitimate); upcoming steps are read-only.
           const actionable = state !== 'upcoming'
           const blocked = s === 'approvals' ? approvalsGate : null
-          const hiredBlocked = app.flow === 'mgmt' && !allApproved
+          const hiredBlocked = app.flow === 'mgmt' && !trackApproved
           return (
             <li key={s} className={`rounded-lg border ${state === 'current' ? 'border-cg-orange/60' : 'border-surface-line'}`}>
               <button
@@ -1253,7 +1254,7 @@ function WorkflowSteps({
                       <button
                         onClick={() => void moveTo('hired')}
                         disabled={busy || hiredBlocked}
-                        title={hiredBlocked ? 'All named approvers must approve first.' : undefined}
+                        title={hiredBlocked ? 'One of the named approvers must approve first.' : undefined}
                         className="rounded-md bg-success px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
                       >
                         Mark Hired
@@ -1291,13 +1292,13 @@ function WorkflowSteps({
   )
 }
 
-// Sign-offs on a management hire — Michael's ruling (2026-09-03): Megan
-// Stover + John Mackay approve all FOH managers; Todd Clarmo + Michael
-// Hodgson approve all BOH chefs. The required approvers are data
-// (people_center_mgmt_approvers); RLS lets an approver sign ONLY as
-// themselves, and a signature is immutable once written. The UI shows the
-// buttons only to the signed-in named approver — the database is the
-// enforcement, this is just honest chrome.
+// Sign-offs on a management hire — Michael's ruling (2026-09-03, updated
+// same day to one-or-the-other): a FOH manager needs the approval of Megan
+// Stover OR John Mackay; a BOH chef needs Todd Clarmo OR Michael Hodgson.
+// The named approvers are data (people_center_mgmt_approvers); RLS lets an
+// approver sign ONLY as themselves, and a signature is immutable once
+// written. The UI shows the buttons only to the signed-in named approver —
+// the database is the enforcement, this is just honest chrome.
 function ApprovalsSection({
   app,
   actor,
@@ -1338,11 +1339,11 @@ function ApprovalsSection({
   return (
     <section className="rounded-xl border border-surface-line p-3">
       <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-charcoal/50">
-        Sign-offs — required for all {trackLabel}
+        Sign-off — {trackLabel}
       </h4>
       <p className="mb-2 text-[11px] text-charcoal/50">
-        Each approver signs personally; a signature cannot be edited or removed. The application
-        cannot move to Offer until everyone below has approved.
+        Any ONE of the approvers below can sign off; each signs personally and a signature cannot
+        be edited or removed. The application cannot move to Offer until one has approved.
       </p>
       {required.length === 0 ? (
         <p className="text-xs text-danger">

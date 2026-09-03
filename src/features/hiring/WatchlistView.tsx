@@ -1,9 +1,12 @@
 // Watch List — the CG Black List (do not interview/hire/re-hire) and Grey
 // List (proceed with caution), digitised from Meg's Aug 2026 workbook.
-// HIGHLY SENSITIVE: nav-gated AND RLS-gated to admin/executive. Reviewers
-// never see this page — they get an anonymous "contact HQ" flag on the
-// application panel instead (checkWatchlist). Removal is soft (inactive):
-// the record is itself history.
+// HIGHLY SENSITIVE — Michael's ruling (2026-09-03): the full list lives in
+// the ADMIN CENTER and is nav-gated AND RLS-gated to ADMIN ONLY. Nobody
+// else ever reads a row: everyone with hiring access gets an anonymous
+// yellow "check with admin" flag on matching applications (checkWatchlist,
+// a security-definer name check), and can REPORT a new name through the
+// submit-only form below (WatchlistReportView, in the Hiring section) —
+// insert without read. Removal is soft (inactive): the record is history.
 
 import { useEffect, useMemo, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
@@ -28,7 +31,7 @@ interface WatchlistViewProps {
 export function WatchlistView({ session, profile }: WatchlistViewProps) {
   const actor = actorFrom(profile, session)
   const user = profile ? toPermissionUser(profile) : null
-  const isHq = user?.role === 'admin' || user?.role === 'executive'
+  const isHq = user?.role === 'admin'
 
   const [entries, setEntries] = useState<WatchlistEntry[]>([])
   const [loading, setLoading] = useState(true)
@@ -59,7 +62,7 @@ export function WatchlistView({ session, profile }: WatchlistViewProps) {
   }, [entries, query])
 
   if (!isHq) {
-    return <p className="p-6 text-sm text-charcoal/55">The watch list is limited to executives and admins.</p>
+    return <p className="p-6 text-sm text-charcoal/55">The watch list is limited to admins.</p>
   }
   if (loading) return <p className="p-6 text-sm text-charcoal/50">Loading watch list…</p>
 
@@ -89,9 +92,11 @@ export function WatchlistView({ session, profile }: WatchlistViewProps) {
             <ShieldAlert className="h-5 w-5 text-danger" /> Hiring watch list
           </h2>
           <p className="mt-1 text-sm text-charcoal/60">
-            Visible to executives and admins only. Applications by a listed name show reviewers a
-            "contact HQ" flag — never the notes. Also check Push reports for anyone marked "not
-            eligible for rehire" (employee attribute report) or the ROE reason report.
+            Visible to admins only. Applications by a listed name show everyone else a yellow
+            "check with admin" flag — never the notes, never which list. Anyone with hiring access
+            can report a new name from the Hiring section; those reports land here. Also check Push
+            reports for anyone marked "not eligible for rehire" (employee attribute report) or the
+            ROE reason report.
           </p>
         </div>
         <button
@@ -187,14 +192,72 @@ export function WatchlistView({ session, profile }: WatchlistViewProps) {
   )
 }
 
+// Submit-only reporting (Hiring section): anyone with hiring access can add
+// a name to the watch list without ever reading a row back — RLS grants
+// insert to the hiring roles while select stays admin-only. Admin reviews
+// what lands.
+export function WatchlistReportView({ session, profile }: WatchlistViewProps) {
+  const actor = actorFrom(profile, session)
+  const [done, setDone] = useState(false)
+
+  return (
+    <div className="mx-auto w-full max-w-2xl p-4 sm:p-6">
+      <div className="mb-4">
+        <h2 className="flex items-center gap-2 text-lg font-semibold">
+          <ShieldAlert className="h-5 w-5 text-warning" /> Report to the watch list
+        </h2>
+        <p className="mt-1 text-sm text-charcoal/60">
+          Know someone we should not hire, or should be cautious about? Report them here — the
+          report goes straight onto the admin-held watch list. You will not be able to see the
+          list itself; a matching applicant will show every reviewer a yellow "check with admin"
+          flag.
+        </p>
+      </div>
+
+      {done ? (
+        <div className="rounded-xl border border-success/40 bg-success/5 px-4 py-6 text-center">
+          <p className="text-sm font-medium text-success">Reported — thank you.</p>
+          <p className="mt-1 text-sm text-charcoal/65">
+            Admin can see your report, and any application under that name will now carry the
+            caution flag.
+          </p>
+          <button
+            onClick={() => setDone(false)}
+            className="mt-3 rounded-md border border-surface-line px-3 py-1.5 text-sm hover:bg-surface-muted"
+          >
+            Report another name
+          </button>
+        </div>
+      ) : (
+        <EntryForm
+          entry={null}
+          reportMode
+          defaultNotedBy={actor.name}
+          onCancel={() => setDone(false)}
+          onSave={async (edits) => {
+            await saveWatchlistEntry(actor, null, edits)
+            setDone(true)
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
 function EntryForm({
   entry,
   onSave,
   onCancel,
+  reportMode,
+  defaultNotedBy,
 }: {
   entry: WatchlistEntry | null
   onSave: (edits: WatchlistEdits) => Promise<void>
   onCancel: () => void
+  /** Submit-only reporting: hides the cancel button's "editing" framing and
+   * keeps who-reported attribution fixed. */
+  reportMode?: boolean
+  defaultNotedBy?: string
 }) {
   const [list, setList] = useState<'black' | 'grey'>(entry?.list ?? 'black')
   const [fullName, setFullName] = useState(entry?.full_name ?? '')
@@ -202,7 +265,7 @@ function EntryForm({
   const [formerCg, setFormerCg] = useState(entry?.former_cg ?? '')
   const [notes, setNotes] = useState(entry?.notes ?? '')
   const [notedDate, setNotedDate] = useState(entry?.noted_date ?? '')
-  const [notedBy, setNotedBy] = useState(entry?.noted_by ?? '')
+  const [notedBy, setNotedBy] = useState(entry?.noted_by ?? defaultNotedBy ?? '')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
@@ -256,11 +319,13 @@ function EntryForm({
           disabled={busy || !fullName.trim()}
           className="rounded-md bg-cg-orange px-3 py-1.5 text-sm font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
         >
-          {busy ? 'Saving…' : entry ? 'Save' : 'Add entry'}
+          {busy ? 'Saving…' : reportMode ? 'Report to watch list' : entry ? 'Save' : 'Add entry'}
         </button>
-        <button onClick={onCancel} disabled={busy} className="rounded-md border border-surface-line px-3 py-1.5 text-sm hover:bg-surface-muted">
-          Cancel
-        </button>
+        {!reportMode && (
+          <button onClick={onCancel} disabled={busy} className="rounded-md border border-surface-line px-3 py-1.5 text-sm hover:bg-surface-muted">
+            Cancel
+          </button>
+        )}
         {err && <p className="text-xs text-danger">{err}</p>}
       </div>
     </div>

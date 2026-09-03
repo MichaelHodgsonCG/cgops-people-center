@@ -21,6 +21,7 @@ import {
   HelpCircle,
   Map,
   ScrollText,
+  ShieldAlert,
   Shirt,
   UserCheck,
   UserCog,
@@ -41,6 +42,7 @@ import { UniformsView } from '../hiring/UniformsView'
 import { InterviewsView } from '../hiring/InterviewsView'
 import { MgmtProcessView } from '../hiring/MgmtProcessView'
 import { VelocityView } from '../hiring/VelocityView'
+import { WatchlistView } from '../hiring/WatchlistView'
 
 // Lazy for the same reason as before the relocation: the sync pipeline (and
 // its xlsx parser) only loads when an admin opens Data Sources.
@@ -56,6 +58,7 @@ type AdminPage =
   | 'uniforms'
   | 'interviews'
   | 'mgmt_process'
+  | 'watchlist'
   | 'velocity'
   | 'activity'
   | 'data_sources'
@@ -70,6 +73,9 @@ const NAV: { page: AdminPage; label: string; icon: LucideIcon; resource: Resourc
   { page: 'uniforms', label: 'Uniforms', icon: Shirt, resource: 'hiring' },
   { page: 'interviews', label: 'Interviews', icon: ClipboardCheck, resource: 'hiring' },
   { page: 'mgmt_process', label: 'Mgmt Hiring', icon: Briefcase, resource: 'hiring' },
+  // The full watch list is ADMIN ONLY (Michael, 2026-09-03: "Do not expose
+  // the watch list") — everyone else reports names via the Hiring section.
+  { page: 'watchlist', label: 'Watch List', icon: ShieldAlert, resource: 'admin_area' },
   // Admin-only for now (Michael, 2026-09-03) — when he opens Pipeline Speed
   // to Execs/ROLs, this resource and the view's own gate both widen.
   { page: 'velocity', label: 'Pipeline Speed', icon: Gauge, resource: 'admin_area' },
@@ -191,6 +197,8 @@ export function AdminShell({ session, profile, profileError, onReturn }: AdminSh
             <InterviewsView session={session} profile={profile} />
           ) : page === 'mgmt_process' ? (
             <MgmtProcessView session={session} profile={profile} />
+          ) : page === 'watchlist' ? (
+            <WatchlistView session={session} profile={profile} />
           ) : page === 'velocity' ? (
             <VelocityView session={session} profile={profile} />
           ) : page === 'activity' ? (

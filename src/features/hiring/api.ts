@@ -155,7 +155,7 @@ export const MGMT_NEXT_ACTION: Partial<Record<ApplicationStatus, string>> = {
   financial_interview: 'Step 3 — send the Gourmet Haven case study + P&L in advance; use the tier for the role (GSM/SM/Sous · BM/AGM · GM/CDC) and record the interview below.',
   tais: 'Step 4 — AGM/GM/CDC only ($350, via Corey Dalton). A TAIS red flag is a HARD STOP. Other roles: move straight on.',
   final_interview: 'Step 5 — for AGM/GM/CDC this interview is held by the VP People, VP Ops, President or Corporate Chefs.',
-  approvals: 'Collect the required sign-offs below. All named approvers must approve before the offer.',
+  approvals: 'Collect a sign-off below — any ONE of the named approvers (Megan/John for FOH, Todd/Michael for BOH) must approve before the offer.',
   offer: 'Step 6 — prepare and present the offer (48-hour sign-back if they need time), then record the outcome.',
 }
 
@@ -329,12 +329,15 @@ export function screenApplication(
   const roleText = (Array.isArray(f.positions) ? f.positions.join(', ') : app.desired_position) ?? ''
   const alcoholRole = /server|bartender/i.test(roleText)
 
-  for (const w of watch) {
-    flags.push(
-      w.list === 'black'
-        ? { level: 'red', reason: 'Name matches the CG do-not-hire list — contact HQ before proceeding (it may be a different person with the same name).' }
-        : { level: 'yellow', reason: 'Name matches the CG proceed-with-caution list — check with HQ.' },
-    )
+  // Any watch-list match is a YELLOW flag (Michael, 2026-09-03): the list
+  // itself is never exposed — which list, and why, stays with admin. The
+  // manager's instruction is always the same: check with admin first.
+  if (watch.length > 0) {
+    flags.push({
+      level: 'yellow',
+      reason:
+        'Name matches the CG watch list — check with admin before proceeding (it may be a different person with the same name).',
+    })
   }
 
   const we = f.work_eligibility
@@ -621,11 +624,12 @@ export async function saveJobDescription(
 }
 
 // --- Management approvals ----------------------------------------------------
-// Michael's ruling (2026-09-03): Megan Stover + John Mackay approve all FOH
-// managers; Todd Clarmo + Michael Hodgson approve all BOH chefs. Required
-// approvers are data (people_center_mgmt_approvers); a signature can only be
-// written by the approver themselves — RLS enforces it, the UI just reflects
-// it. Approvals are immutable.
+// Michael's ruling (2026-09-03, updated same day): FOH managers are approved
+// by Megan Stover or John Mackay — ONE of them; BOH chefs by Todd Clarmo or
+// Michael Hodgson — ONE of them. The named approvers are data
+// (people_center_mgmt_approvers); a signature can only be written by the
+// approver themselves — RLS enforces it, the UI just reflects it. Approvals
+// are immutable.
 
 export interface MgmtApprover {
   track: MgmtTrack
@@ -1148,6 +1152,15 @@ export interface InterviewAnswer {
   alt_credit: boolean // "acceptable alternate response" credited (1 point)
   alt_note: string
   text?: string // questionnaire answer, in the applicant's own words
+  unacceptable?: boolean // inappropriate response (rude/discriminatory) — FAILS the whole interview
+  unacceptable_note?: string
+}
+
+/** Michael's rule (2026-09-03): one unacceptable response — something
+ * deemed inappropriate: rude, racial, sexist — fails the entire interview,
+ * whatever the score. */
+export function interviewFailed(answers: InterviewAnswer[]): boolean {
+  return answers.some((a) => a.unacceptable)
 }
 
 export interface TemplateSnapshot {
@@ -1277,6 +1290,7 @@ export async function recordApplicationInterview(
   if (!data || data.length === 0) {
     throw new Error('The database did not accept this interview — you are not the reviewer for this position.')
   }
+  const failed = template.kind !== 'questionnaire' && interviewFailed(answers)
   const { error: evErr } = await supabase.from('people_center_application_events').insert({
     application_id: app.id,
     event: template.kind === 'questionnaire' ? 'screening.recorded' : 'interview.recorded',
@@ -1285,7 +1299,9 @@ export async function recordApplicationInterview(
     detail:
       template.kind === 'questionnaire'
         ? template.name
-        : `${template.name} — score ${score}/${interviewMaxScore(template.questions)}`,
+        : failed
+          ? `${template.name} — FAILED: unacceptable response`
+          : `${template.name} — score ${score}/${interviewMaxScore(template.questions)}`,
   })
   if (evErr) throw evErr
   await recordAudit(
@@ -1294,7 +1310,9 @@ export async function recordApplicationInterview(
     'application_interview',
     app.id,
     app.applicant?.full_name ?? 'applicant',
-    `Patterned interview recorded (${app.desired_position} — ${app.location_name}): ${template.name}, score ${score}`,
+    `Patterned interview recorded (${app.desired_position} — ${app.location_name}): ${template.name}, ${
+      failed ? 'FAILED (unacceptable response)' : `score ${score}`
+    }`,
   )
 }
 

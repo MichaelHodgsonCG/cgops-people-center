@@ -32,7 +32,7 @@ import { JobDescriptionsView } from './JobDescriptionsView'
 import { InterviewsView } from './InterviewsView'
 import { UniformsView } from './UniformsView'
 import { MgmtProcessView } from './MgmtProcessView'
-import { WatchlistView } from './WatchlistView'
+import { WatchlistReportView } from './WatchlistView'
 
 // Reviewers and template EDITING live in the Admin Center (spec 3f10f057);
 // the document pages here are read-only references to the SAME rows the
@@ -43,7 +43,7 @@ type HiringPage =
   | 'uniforms'
   | 'interviews'
   | 'mgmt_process'
-  | 'watchlist'
+  | 'watchlist_report'
 
 const NAV: { page: HiringPage; label: string; icon: LucideIcon; configureOnly?: boolean }[] = [
   { page: 'applications', label: 'Applications', icon: Inbox },
@@ -51,7 +51,9 @@ const NAV: { page: HiringPage; label: string; icon: LucideIcon; configureOnly?: 
   { page: 'uniforms', label: 'Uniforms', icon: Shirt },
   { page: 'interviews', label: 'Interviews', icon: ClipboardCheck },
   { page: 'mgmt_process', label: 'Mgmt Hiring', icon: Briefcase },
-  { page: 'watchlist', label: 'Watch List', icon: ShieldAlert, configureOnly: true },
+  // Submit-only: anyone with hiring access can report a name; the full watch
+  // list itself lives in the Admin Center, admin-only (Michael, 2026-09-03).
+  { page: 'watchlist_report', label: 'Report to Watch List', icon: ShieldAlert },
 ]
 
 // Shared with AppShell so the rail stays the width the user chose.
@@ -163,8 +165,8 @@ export function HiringShell({ session, profile, profileError, onReturn }: Hiring
             <InterviewsView session={session} profile={profile} readOnly />
           ) : page === 'mgmt_process' ? (
             <MgmtProcessView session={session} profile={profile} readOnly />
-          ) : page === 'watchlist' ? (
-            <WatchlistView session={session} profile={profile} />
+          ) : page === 'watchlist_report' ? (
+            <WatchlistReportView session={session} profile={profile} />
           ) : (
             <ApplicationsView session={session} profile={profile} />
           )}

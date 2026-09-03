@@ -13,6 +13,7 @@ import { errText } from '../../lib/errText'
 import {
   fetchApplicationInterviews,
   fetchInterviewTemplates,
+  interviewFailed,
   interviewMaxScore,
   interviewScore,
   recordApplicationInterview,
@@ -120,6 +121,7 @@ export function InterviewSection({
 function RecordedInterview({ iv }: { iv: ApplicationInterview }) {
   const [open, setOpen] = useState(false)
   const questionnaire = iv.template.kind === 'questionnaire'
+  const failed = !questionnaire && interviewFailed(iv.answers)
   const max = interviewMaxScore(iv.template.questions)
   return (
     <li className="rounded-md border border-surface-line">
@@ -145,7 +147,12 @@ function RecordedInterview({ iv }: { iv: ApplicationInterview }) {
           </span>
         </span>
         <span className="flex shrink-0 gap-1">
-          {!questionnaire &&
+          {failed ? (
+            <span className="rounded-full bg-danger px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+              Fail — unacceptable response
+            </span>
+          ) : (
+            !questionnaire &&
             iv.template.thresholds.map((th) => (
               <span
                 key={th.label}
@@ -155,7 +162,8 @@ function RecordedInterview({ iv }: { iv: ApplicationInterview }) {
               >
                 {th.label} {iv.score >= th.min ? '✓' : `< ${th.min}`}
               </span>
-            ))}
+            ))
+          )}
         </span>
       </button>
       {open && (
@@ -183,6 +191,11 @@ function RecordedInterview({ iv }: { iv: ApplicationInterview }) {
                   <p className="font-medium text-charcoal/80">
                     {i + 1}. {q.prompt} <span className="text-charcoal/45">— {pts} pt{pts === 1 ? '' : 's'}</span>
                   </p>
+                  {a?.unacceptable && (
+                    <p className="mt-0.5 pl-4 font-medium text-danger">
+                      ⛔ Unacceptable response — fails the interview{a.unacceptable_note ? `: ${a.unacceptable_note}` : ''}
+                    </p>
+                  )}
                   {a && (a.picked.length > 0 || a.alt_credit) ? (
                     <ul className="mt-0.5 pl-4 text-charcoal/65">
                       {a.picked.map((idx) => (
@@ -234,12 +247,20 @@ function InterviewRecorder({
   useEffect(() => {
     setAnswers(
       template
-        ? template.questions.map(() => ({ picked: [], alt_credit: false, alt_note: '', text: '' }))
+        ? template.questions.map(() => ({
+            picked: [],
+            alt_credit: false,
+            alt_note: '',
+            text: '',
+            unacceptable: false,
+            unacceptable_note: '',
+          }))
         : [],
     )
   }, [template])
 
   const questionnaire = template?.kind === 'questionnaire'
+  const failed = !questionnaire && interviewFailed(answers)
 
   function toggle(qi: number, ai: number) {
     setAnswers((prev) =>
@@ -335,6 +356,27 @@ function InterviewRecorder({
                     <span className="text-xs font-normal text-charcoal/45">— {pts} pt{pts === 1 ? '' : 's'}</span>
                   </p>
                   <div className="space-y-0.5">
+                    {/* Michael's rule: the unacceptable option leads every list,
+                        and one unacceptable response fails the whole interview. */}
+                    <div className={`rounded-md px-2 py-1 ${a.unacceptable ? 'bg-danger/10' : ''}`}>
+                      <label className="flex cursor-pointer items-baseline gap-2 text-sm font-medium text-danger">
+                        <input
+                          type="checkbox"
+                          checked={!!a.unacceptable}
+                          onChange={() => setAlt(qi, { unacceptable: !a.unacceptable })}
+                          className="translate-y-0.5"
+                        />
+                        Unacceptable response — fails the whole interview (rude, discriminatory, inappropriate)
+                      </label>
+                      {a.unacceptable && (
+                        <input
+                          value={a.unacceptable_note ?? ''}
+                          onChange={(e) => setAlt(qi, { unacceptable_note: e.target.value })}
+                          placeholder="Note what was said…"
+                          className="mt-1 w-full rounded-md border border-danger/40 bg-surface px-2 py-1 text-xs"
+                        />
+                      )}
+                    </div>
                     {q.answers.map((ans, ai) => (
                       <label key={ai} className="flex cursor-pointer items-baseline gap-2 text-sm text-charcoal/80">
                         <input
@@ -380,11 +422,20 @@ function InterviewRecorder({
         </>
       )}
 
+      {failed && (
+        <p className="mt-2 rounded-md bg-danger/10 px-3 py-2 text-sm font-medium text-danger">
+          This interview is a FAIL — an unacceptable response was recorded. The score does not
+          matter; do not proceed with this candidate.
+        </p>
+      )}
+
       <div className="mt-2 flex items-center gap-2">
         <button
           onClick={() => void save()}
           disabled={busy || !template}
-          className="rounded-md bg-cg-orange px-3 py-1.5 text-sm font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
+          className={`rounded-md px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50 ${
+            failed ? 'bg-danger hover:opacity-90' : 'bg-cg-orange hover:bg-cg-orange-hover'
+          }`}
         >
           {busy
             ? 'Saving…'
@@ -392,7 +443,9 @@ function InterviewRecorder({
               ? 'Save interview'
               : questionnaire
                 ? 'Save screening'
-                : `Save interview (${score}/${interviewMaxScore(template.questions)})`}
+                : failed
+                  ? 'Save interview — FAILED'
+                  : `Save interview (${score}/${interviewMaxScore(template.questions)})`}
         </button>
         <button
           onClick={onCancel}
