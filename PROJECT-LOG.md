@@ -1,5 +1,13 @@
 # Project Log
 
+## [2026-09-03] Reference Check Form baked in (Michael's audit catch)
+
+**Shipped:** Audited the CG Mgmt Interview Process workbook (re-sent by Michael, same file as digitised — sha-matched) against the app. Finding: the guide TEXT of all 10 tabs was in, but the fillable structures were not — chiefly the Reference Check Form (right half of tab 2). Built it field-for-field into the Reference check step of the guided workflow, both flows: per-call record (source Candidate-provided/CG-sourced, date, contact, phone, company, their position, position confirmed, job performance, attendance/punctuality, attitude, opportunities/concerns, would-you-rehire with the process's "No — STOP!" warning, other comments), live tally vs the standard (2 positive min, +1 self-sourced for mgmt; goes green when met), immutable records (migration 20260903200000: RLS mirrors recorded interviews — reviewer inserts, admin/exec amend, no delete), reference.recorded event + audit per save. Vercel production READY (1311f6c).
+**Roadmap:** Mgmt hiring workflow -> reference step now fully form-backed.
+**Decisions:** Remaining fill-ins on the interview tabs (Interviewer/Date auto-captured by events; Where in-person/Zoom, Proceed?, TAIS link, Offer signed-back?) stay as step notes for now — reported to Michael as optional structured fields, not built without his word.
+**Blockers:** none.
+**Next:** Michael to say if Where/Proceed/TAIS-link/Signed-back should become structured fields like the reference form.
+
 ## [2026-09-03] Pipeline Speed tracker (admin-only)
 
 **Shipped:** Admin Center gains a Pipeline Speed page, per Michael's efficiency ask: time between steps for every candidate and per-manager pace, read entirely from the workflow's existing stage-move events (no new writes, no schema change). Managers table shows moves made and the median/average/longest wait each person closes, fastest first. Candidates list puts open applications first with the longest current wait on top; each row expands to a stage-by-stage breakdown (time in every stage + who moved it on). Summary cards: open count, average time to outcome, longest current wait. Pace colours match house thresholds (<2d green, ≥7d red = the stale threshold). Verified the aggregation against SQL on the live events (10 moves, Michael's demo pace ~40min avg). Vercel production READY (e9b3032).
