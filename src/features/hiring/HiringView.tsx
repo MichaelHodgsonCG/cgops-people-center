@@ -20,11 +20,13 @@ import type { UserProfile } from '../../types'
 import {
   STATUS_FLOW,
   STATUS_LABELS,
+  checkWatchlist,
   fetchAllPositions,
   fetchApplicationDetail,
   fetchApplications,
   fetchHiringReviewers,
   fetchPriorApplications,
+  fetchWatchlistEntriesByName,
   setApplicationStatus,
   setHiringReviewer,
   type ApplicationAck,
@@ -33,6 +35,8 @@ import {
   type ApplicationStatus,
   type HiringPosition,
   type HiringReviewer,
+  type WatchlistEntry,
+  type WatchlistMatch,
 } from './api'
 
 const STATUS_CLASS: Record<string, string> = {
@@ -193,6 +197,8 @@ function ApplicationPanel({
   const [acks, setAcks] = useState<ApplicationAck[]>([])
   const [events, setEvents] = useState<ApplicationEvent[]>([])
   const [prior, setPrior] = useState<Awaited<ReturnType<typeof fetchPriorApplications>>>([])
+  const [watch, setWatch] = useState<WatchlistMatch[]>([])
+  const [watchNotes, setWatchNotes] = useState<WatchlistEntry[]>([])
   const [nextStatus, setNextStatus] = useState<ApplicationStatus>(app.status)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
@@ -206,7 +212,14 @@ function ApplicationPanel({
       })
       .catch((e: Error) => setErr(e.message))
     fetchPriorApplications(app.applicant_id, app.id).then(setPrior).catch(() => setPrior([]))
-  }, [app.id, app.applicant_id])
+    // Watch-list check: the RPC tells anyone WHICH list matched (never the
+    // notes); the table read returns the notes only to admin/executive (RLS).
+    const nm = app.applicant?.full_name
+    if (nm) {
+      checkWatchlist(nm).then(setWatch).catch(() => setWatch([]))
+      fetchWatchlistEntriesByName(nm).then(setWatchNotes).catch(() => setWatchNotes([]))
+    }
+  }, [app.id, app.applicant_id, app.applicant?.full_name])
 
   async function saveStatus() {
     if (nextStatus === app.status) return
@@ -240,6 +253,39 @@ function ApplicationPanel({
             {STATUS_LABELS[app.status]}
           </span>
         </div>
+
+        {watch.length > 0 && (
+          <div
+            className={`mb-3 rounded-md border px-3 py-2 text-xs ${
+              watch.some((w) => w.list === 'black')
+                ? 'border-danger/50 bg-danger/10'
+                : 'border-warning/50 bg-warning/10'
+            }`}
+          >
+            <p className={`font-medium ${watch.some((w) => w.list === 'black') ? 'text-danger' : 'text-warning'}`}>
+              {watch.some((w) => w.list === 'black')
+                ? 'This name matches the CG do-not-hire list. Do not interview, hire, or re-hire.'
+                : 'This name matches the CG proceed-with-caution list.'}
+            </p>
+            {watchNotes.length > 0 ? (
+              <ul className="mt-1 space-y-0.5 text-charcoal/75">
+                {watchNotes.map((w) => (
+                  <li key={w.id}>
+                    {w.role && `${w.role} · `}
+                    {w.former_cg && w.former_cg !== '-' && `${w.former_cg} · `}
+                    {w.notes}
+                    {w.noted_date && ` (${w.noted_date})`}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-0.5 text-charcoal/70">
+                Contact HQ (the People team) before taking this application any further — the
+                details are held there. It may also be a different person with the same name.
+              </p>
+            )}
+          </div>
+        )}
 
         {prior.length > 0 && (
           <div className="mb-3 rounded-md border border-info/40 bg-info/5 px-3 py-2 text-xs">

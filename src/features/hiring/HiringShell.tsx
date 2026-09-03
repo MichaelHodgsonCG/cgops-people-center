@@ -11,11 +11,13 @@ import type { Session } from '@supabase/supabase-js'
 import {
   ArrowLeft,
   BookOpenText,
+  Briefcase,
   ChevronsLeft,
   ChevronsRight,
   ClipboardCheck,
   HelpCircle,
   Inbox,
+  ShieldAlert,
   Shirt,
   UserCog,
   type LucideIcon,
@@ -30,14 +32,25 @@ import { ApplicationsView, ReviewersView } from './HiringView'
 import { JobDescriptionsView } from './JobDescriptionsView'
 import { InterviewsView } from './InterviewsView'
 import { UniformsView } from './UniformsView'
+import { MgmtProcessView } from './MgmtProcessView'
+import { WatchlistView } from './WatchlistView'
 
-type HiringPage = 'applications' | 'job_descriptions' | 'uniforms' | 'interviews' | 'reviewers'
+type HiringPage =
+  | 'applications'
+  | 'job_descriptions'
+  | 'uniforms'
+  | 'interviews'
+  | 'mgmt_process'
+  | 'watchlist'
+  | 'reviewers'
 
 const NAV: { page: HiringPage; label: string; icon: LucideIcon; configureOnly?: boolean }[] = [
   { page: 'applications', label: 'Applications', icon: Inbox },
   { page: 'job_descriptions', label: 'Job Descriptions', icon: BookOpenText },
   { page: 'uniforms', label: 'Uniforms', icon: Shirt },
   { page: 'interviews', label: 'Interviews', icon: ClipboardCheck },
+  { page: 'mgmt_process', label: 'Mgmt Hiring', icon: Briefcase },
+  { page: 'watchlist', label: 'Watch List', icon: ShieldAlert, configureOnly: true },
   { page: 'reviewers', label: 'Reviewers', icon: UserCog, configureOnly: true },
 ]
 
@@ -150,6 +163,10 @@ export function HiringShell({ session, profile, profileError, onReturn }: Hiring
             <UniformsView session={session} profile={profile} />
           ) : page === 'interviews' ? (
             <InterviewsView session={session} profile={profile} />
+          ) : page === 'mgmt_process' ? (
+            <MgmtProcessView session={session} profile={profile} />
+          ) : page === 'watchlist' ? (
+            <WatchlistView session={session} profile={profile} />
           ) : (
             <ApplicationsView session={session} profile={profile} />
           )}

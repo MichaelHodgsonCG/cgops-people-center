@@ -289,6 +289,209 @@ export async function saveJobDescription(
   )
 }
 
+// --- Hiring watch list -------------------------------------------------------
+// The CG Black List (do not interview/hire/re-hire) + Grey List (proceed with
+// caution). Table access is admin/executive ONLY (RLS). Everyone else gets
+// checkWatchlist(): a security-definer name check that says WHICH list a name
+// is on and nothing more — the application panel uses it to tell a reviewer
+// "contact HQ before proceeding" without exposing a word of the notes.
+
+export type WatchlistKind = 'black' | 'grey'
+
+export interface WatchlistEntry {
+  id: string
+  list: WatchlistKind
+  full_name: string
+  role: string
+  former_cg: string
+  notes: string
+  noted_date: string
+  noted_by: string
+  active: boolean
+  updated_at: string
+  updated_by_name: string | null
+}
+
+export interface WatchlistEdits {
+  list: WatchlistKind
+  full_name: string
+  role: string
+  former_cg: string
+  notes: string
+  noted_date: string
+  noted_by: string
+}
+
+export async function fetchWatchlist(): Promise<WatchlistEntry[]> {
+  const { data, error } = await supabase
+    .from('people_center_hiring_watchlist')
+    .select('id, list, full_name, role, former_cg, notes, noted_date, noted_by, active, updated_at, updated_by_name')
+    .eq('active', true)
+    .order('full_name')
+  if (error) throw error
+  return (data as WatchlistEntry[]) ?? []
+}
+
+export async function saveWatchlistEntry(
+  actor: Actor,
+  existing: WatchlistEntry | null,
+  edits: WatchlistEdits,
+): Promise<void> {
+  if (existing) {
+    const { data, error } = await supabase
+      .from('people_center_hiring_watchlist')
+      .update({
+        ...edits,
+        updated_at: new Date().toISOString(),
+        updated_by: actor.personId,
+        updated_by_name: actor.name,
+      })
+      .eq('id', existing.id)
+      .select('id')
+    if (error) throw error
+    if (!data || data.length === 0) throw new Error('The database did not accept this change.')
+  } else {
+    const { error } = await supabase.from('people_center_hiring_watchlist').insert({
+      ...edits,
+      updated_by: actor.personId,
+      updated_by_name: actor.name,
+    })
+    if (error) throw error
+  }
+  await recordAudit(
+    actor,
+    existing ? 'update' : 'create',
+    'watchlist_entry',
+    existing?.id ?? edits.full_name,
+    edits.full_name,
+    `${existing ? 'Updated' : 'Added'} ${edits.list === 'black' ? 'Black List' : 'Grey List'} entry for ${edits.full_name}`,
+  )
+}
+
+export async function removeWatchlistEntry(actor: Actor, entry: WatchlistEntry): Promise<void> {
+  // Soft removal: keep the record (it is itself history), just stop matching.
+  const { data, error } = await supabase
+    .from('people_center_hiring_watchlist')
+    .update({
+      active: false,
+      updated_at: new Date().toISOString(),
+      updated_by: actor.personId,
+      updated_by_name: actor.name,
+    })
+    .eq('id', entry.id)
+    .select('id')
+  if (error) throw error
+  if (!data || data.length === 0) throw new Error('The database did not accept this change.')
+  await recordAudit(
+    actor,
+    'update',
+    'watchlist_entry',
+    entry.id,
+    entry.full_name,
+    `Removed ${entry.full_name} from the ${entry.list === 'black' ? 'Black' : 'Grey'} List (kept inactive for history)`,
+  )
+}
+
+export interface WatchlistMatch {
+  list: WatchlistKind
+  matched_name: string
+}
+
+/** Exact-name check anyone signed in may run — returns which list (if any),
+ * never the notes. */
+export async function checkWatchlist(name: string): Promise<WatchlistMatch[]> {
+  const { data, error } = await supabase.rpc('people_center_watchlist_check', { p_name: name })
+  if (error) throw error
+  return (data as WatchlistMatch[]) ?? []
+}
+
+/** The full entries for a name — RLS returns rows only to admin/executive,
+ * so the application panel can show HQ the notes and everyone else nothing. */
+export async function fetchWatchlistEntriesByName(name: string): Promise<WatchlistEntry[]> {
+  const { data, error } = await supabase
+    .from('people_center_hiring_watchlist')
+    .select('id, list, full_name, role, former_cg, notes, noted_date, noted_by, active, updated_at, updated_by_name')
+    .eq('active', true)
+    .ilike('full_name', name.trim())
+  if (error) throw error
+  return (data as WatchlistEntry[]) ?? []
+}
+
+// --- Management hiring guides ------------------------------------------------
+// The CG Mgmt Interview Process (Mar 2026), one document per step. Readable
+// by manager altitude and up (RLS); edited by executive/admin.
+
+export interface HiringGuide {
+  id: string
+  sort: number
+  title: string
+  subtitle: string
+  body: string
+  source_file: string
+  version: number
+  active: boolean
+  updated_at: string
+  updated_by_name: string | null
+}
+
+export interface HiringGuideEdits {
+  sort: number
+  title: string
+  subtitle: string
+  body: string
+}
+
+export async function fetchHiringGuides(): Promise<HiringGuide[]> {
+  const { data, error } = await supabase
+    .from('people_center_hiring_guides')
+    .select('id, sort, title, subtitle, body, source_file, version, active, updated_at, updated_by_name')
+    .eq('active', true)
+    .order('sort')
+  if (error) throw error
+  return (data as HiringGuide[]) ?? []
+}
+
+export async function saveHiringGuide(
+  actor: Actor,
+  existing: HiringGuide | null,
+  edits: HiringGuideEdits,
+): Promise<void> {
+  if (existing) {
+    const { data, error } = await supabase
+      .from('people_center_hiring_guides')
+      .update({
+        ...edits,
+        version: existing.version + 1,
+        updated_at: new Date().toISOString(),
+        updated_by: actor.personId,
+        updated_by_name: actor.name,
+      })
+      .eq('id', existing.id)
+      .select('id')
+    if (error) throw error
+    if (!data || data.length === 0) {
+      throw new Error('The database did not accept this change — editing is executive/admin only.')
+    }
+  } else {
+    const { error } = await supabase.from('people_center_hiring_guides').insert({
+      ...edits,
+      updated_by: actor.personId,
+      updated_by_name: actor.name,
+    })
+    if (error) throw error
+  }
+  await recordAudit(
+    actor,
+    existing ? 'update' : 'create',
+    'hiring_guide',
+    existing?.id ?? edits.title,
+    edits.title,
+    existing
+      ? `Hiring guide "${edits.title}" updated (v${existing.version + 1})`
+      : `Hiring guide "${edits.title}" added`,
+  )
+}
+
 // --- Uniform & grooming standards --------------------------------------------
 // The second document of the acknowledgement pair (acks doc='uniform_grooming').
 // Per BRAND + audience (FOH/BOH) — these differ by restaurant brand, unlike
