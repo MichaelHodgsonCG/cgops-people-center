@@ -32,8 +32,18 @@ const RATE_LIMIT_PER_HOUR = 20
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'content-type',
+}
+
+// Which uniform-standard brand covers each location concept. Beertown and
+// Sociable share one standard set; new concepts get an entry here.
+const CONCEPT_BRAND: Record<string, string> = {
+  'Beertown': 'Beertown & Sociable',
+  'Sociable Kitchen Tavern': 'Beertown & Sociable',
+  'Sole': 'Solé',
+  'The Bauer Kitchen': 'The Bauer Kitchen',
+  'Wildcraft': 'Wildcraft',
 }
 
 function json(status: number, body: unknown): Response {
@@ -58,15 +68,59 @@ function nonEmpty(v: unknown): boolean {
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS })
-  if (Deno.env.get('HIRING_INTAKE_ENABLED') !== 'true') {
-    return json(503, { error: 'Applications are not open through this channel yet.' })
-  }
-  if (req.method !== 'POST') return json(405, { error: 'POST only' })
 
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   )
+
+  // Read-only config for the guided application form (and its preview):
+  // restaurant list, TM roles with their job descriptions, and the uniform
+  // standards applicants must acknowledge — exactly what any applicant would
+  // be shown, approved for public read (Michael, 2026-09-03). The
+  // HIRING_INTAKE_ENABLED gate below still hard-blocks every WRITE.
+  if (req.method === 'GET') {
+    const [locs, jds, uniforms] = await Promise.all([
+      supabase
+        .from('people_center_locations')
+        .select('id, name, status, concept:people_center_concepts ( name )')
+        .in('status', ['open', 'opening'])
+        .not('concept_id', 'is', null)
+        .order('name'),
+      supabase
+        .from('people_center_job_descriptions')
+        .select('role_title, department, reports_to, body')
+        .eq('active', true)
+        .order('role_title'),
+      supabase
+        .from('people_center_uniform_standards')
+        .select('brand, audience, title, body, effective')
+        .eq('active', true)
+        .in('audience', ['FOH', 'BOH', ''])
+        .order('brand'),
+    ])
+    if (locs.error || jds.error || uniforms.error) {
+      return json(500, { error: 'Could not load the application form — please try again.' })
+    }
+    type LocRow = { id: string; name: string; status: string; concept: { name: string } | null }
+    return json(200, {
+      enabled: Deno.env.get('HIRING_INTAKE_ENABLED') === 'true',
+      turnstile_site_key: Deno.env.get('TURNSTILE_SITE_KEY') ?? null,
+      locations: ((locs.data as unknown as LocRow[]) ?? []).map((l) => ({
+        id: l.id,
+        name: l.name,
+        opening: l.status === 'opening',
+        brand: CONCEPT_BRAND[l.concept?.name ?? ''] ?? l.concept?.name ?? '',
+      })),
+      positions: jds.data ?? [],
+      uniform_standards: uniforms.data ?? [],
+    })
+  }
+
+  if (Deno.env.get('HIRING_INTAKE_ENABLED') !== 'true') {
+    return json(503, { error: 'Applications are not open through this channel yet.' })
+  }
+  if (req.method !== 'POST') return json(405, { error: 'POST only' })
 
   // Rate limit per IP.
   const ip =

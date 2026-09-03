@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import { FileText, Inbox, UserCog } from 'lucide-react'
+import { ExternalLink, FileText, Inbox, UserCog } from 'lucide-react'
 import { actorFrom } from '../../lib/activity'
 import { errText } from '../../lib/errText'
 import { can, toPermissionUser } from '../../permissions'
@@ -89,14 +89,27 @@ export function ApplicationsView({ session, profile }: HiringPageProps) {
 
   return (
     <div className="mx-auto w-full max-w-4xl p-4 sm:p-6">
-      <div className="mb-4">
-        <h2 className="flex items-center gap-2 text-lg font-semibold">
-          <Inbox className="h-5 w-5 text-cg-orange" /> Team Member applications
-        </h2>
-        <p className="mt-1 text-sm text-charcoal/60">
-          The digital application record: every submission, its acknowledgements, and its stage
-          history. Retention runs from date of submission.
-        </p>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h2 className="flex items-center gap-2 text-lg font-semibold">
+            <Inbox className="h-5 w-5 text-cg-orange" /> Team Member applications
+          </h2>
+          <p className="mt-1 text-sm text-charcoal/60">
+            The digital application record: every submission, its acknowledgements, and its stage
+            history. Retention runs from date of submission.
+          </p>
+        </div>
+        {/* The guided public form, in preview mode (never submits). The live
+            link for websites is /apply — submissions stay off until Michael
+            flips HIRING_INTAKE_ENABLED. */}
+        <a
+          href="/apply?preview=1"
+          target="_blank"
+          rel="noreferrer"
+          className="flex items-center gap-1.5 rounded-md border border-surface-line px-2.5 py-1.5 text-xs font-medium hover:bg-surface-muted"
+        >
+          <ExternalLink className="h-3.5 w-3.5" /> Preview application form
+        </a>
       </div>
 
       {error && <p className="mb-3 rounded-md bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>}
