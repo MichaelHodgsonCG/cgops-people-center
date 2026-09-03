@@ -21,12 +21,14 @@ import {
 interface UniformsViewProps {
   session: Session
   profile: UserProfile | null
+  /** Hiring-section reference mode: same rows, no editing — the editors live in the Admin Center (spec 3f10f057). */
+  readOnly?: boolean
 }
 
-export function UniformsView({ session, profile }: UniformsViewProps) {
+export function UniformsView({ session, profile, readOnly }: UniformsViewProps) {
   const actor = actorFrom(profile, session)
   const user = profile ? toPermissionUser(profile) : null
-  const canEdit = can(user, 'update', 'hiring')
+  const canEdit = !readOnly && can(user, 'update', 'hiring')
 
   const [docs, setDocs] = useState<UniformStandard[]>([])
   const [loading, setLoading] = useState(true)

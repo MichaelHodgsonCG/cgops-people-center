@@ -24,12 +24,14 @@ import {
 interface InterviewsViewProps {
   session: Session
   profile: UserProfile | null
+  /** Hiring-section reference mode: same rows, no editing — the editors live in the Admin Center (spec 3f10f057). */
+  readOnly?: boolean
 }
 
-export function InterviewsView({ session, profile }: InterviewsViewProps) {
+export function InterviewsView({ session, profile, readOnly }: InterviewsViewProps) {
   const actor = actorFrom(profile, session)
   const user = profile ? toPermissionUser(profile) : null
-  const canEdit = can(user, 'update', 'hiring')
+  const canEdit = !readOnly && can(user, 'update', 'hiring')
 
   const [templates, setTemplates] = useState<InterviewTemplate[]>([])
   const [loading, setLoading] = useState(true)

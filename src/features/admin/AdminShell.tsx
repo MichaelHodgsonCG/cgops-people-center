@@ -1,12 +1,13 @@
-// Hiring is its own section of the app (Michael's direction, 2026-09-02):
-// entering it replaces the People Center shell with a hiring-specific one —
-// its own left menu, with "Return to People Center" pinned at the bottom.
-// Same rail/header language as AppShell so the switch reads as changing
-// sections, not changing products, and the expand/collapse preference is
-// shared with the main rail. New hiring pages (Phase 2: interviews,
-// reference checks, decisions) slot in as NAV entries here.
+// Admin Center — People Center's configure-side, its own section exactly
+// like Hiring (spec 3f10f057, approved via Ember review afbc1537, authority:
+// Michael's ruling a26b9315 / standard 77ca34f4). Gathers users & access,
+// coverage, hiring setup (reviewers + template EDITING — the Hiring section
+// keeps read-only references to the same rows), the activity log and data
+// sources. Section opens for admin + executive; pages carry their own
+// gates, and every control that grants reach stays admin-only (Ember's
+// guard) — the section gate is never the control gate.
 
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import {
   ArrowLeft,
@@ -15,59 +16,75 @@ import {
   ChevronsLeft,
   ChevronsRight,
   ClipboardCheck,
+  Database,
   HelpCircle,
-  Inbox,
-  ShieldAlert,
+  Map,
+  ScrollText,
   Shirt,
+  UserCheck,
+  UserCog,
   type LucideIcon,
 } from 'lucide-react'
-import { can, toPermissionUser } from '../../permissions'
+import { can, toPermissionUser, type Resource } from '../../permissions'
 import type { UserProfile } from '../../types'
 import { UserMenu } from '../../components/AppShell'
 import { FeedbackWidget } from '../../components/FeedbackWidget'
 import { HelpPanel } from '../help/HelpPanel'
 import monogram from '../../assets/CG Logo Small.png'
-import { ApplicationsView } from './HiringView'
-import { JobDescriptionsView } from './JobDescriptionsView'
-import { InterviewsView } from './InterviewsView'
-import { UniformsView } from './UniformsView'
-import { MgmtProcessView } from './MgmtProcessView'
-import { WatchlistView } from './WatchlistView'
+import { UsersView } from './UsersView'
+import { CoverageView } from '../coverage/CoverageView'
+import { ActivityLogView } from '../activity/ActivityLogView'
+import { ReviewersView } from '../hiring/HiringView'
+import { JobDescriptionsView } from '../hiring/JobDescriptionsView'
+import { UniformsView } from '../hiring/UniformsView'
+import { InterviewsView } from '../hiring/InterviewsView'
+import { MgmtProcessView } from '../hiring/MgmtProcessView'
 
-// Reviewers and template EDITING live in the Admin Center (spec 3f10f057);
-// the document pages here are read-only references to the SAME rows the
-// Admin editors write — views, never copies (Ember's condition, afbc1537).
-type HiringPage =
-  | 'applications'
+// Lazy for the same reason as before the relocation: the sync pipeline (and
+// its xlsx parser) only loads when an admin opens Data Sources.
+const DataSourcesView = lazy(() =>
+  import('../data-sources/DataSourcesView').then((m) => ({ default: m.DataSourcesView })),
+)
+
+type AdminPage =
+  | 'users'
+  | 'coverage'
+  | 'reviewers'
   | 'job_descriptions'
   | 'uniforms'
   | 'interviews'
   | 'mgmt_process'
-  | 'watchlist'
+  | 'activity'
+  | 'data_sources'
 
-const NAV: { page: HiringPage; label: string; icon: LucideIcon; configureOnly?: boolean }[] = [
-  { page: 'applications', label: 'Applications', icon: Inbox },
-  { page: 'job_descriptions', label: 'Job Descriptions', icon: BookOpenText },
-  { page: 'uniforms', label: 'Uniforms', icon: Shirt },
-  { page: 'interviews', label: 'Interviews', icon: ClipboardCheck },
-  { page: 'mgmt_process', label: 'Mgmt Hiring', icon: Briefcase },
-  { page: 'watchlist', label: 'Watch List', icon: ShieldAlert, configureOnly: true },
+// Each page declares the resource that gates it — the same vocabulary the
+// pages themselves check, so the nav never shows a door the page would slam.
+const NAV: { page: AdminPage; label: string; icon: LucideIcon; resource: Resource }[] = [
+  { page: 'users', label: 'Users & Access', icon: UserCog, resource: 'admin_area' },
+  { page: 'coverage', label: 'Coverage', icon: Map, resource: 'user_scopes' },
+  { page: 'reviewers', label: 'Hiring Reviewers', icon: UserCheck, resource: 'hiring' },
+  { page: 'job_descriptions', label: 'Job Descriptions', icon: BookOpenText, resource: 'hiring' },
+  { page: 'uniforms', label: 'Uniforms', icon: Shirt, resource: 'hiring' },
+  { page: 'interviews', label: 'Interviews', icon: ClipboardCheck, resource: 'hiring' },
+  { page: 'mgmt_process', label: 'Mgmt Hiring', icon: Briefcase, resource: 'hiring' },
+  { page: 'activity', label: 'Activity Log', icon: ScrollText, resource: 'admin_area' },
+  { page: 'data_sources', label: 'Data Sources', icon: Database, resource: 'data_sources' },
 ]
 
-// Shared with AppShell so the rail stays the width the user chose.
+// Shared with the other shells so the rail keeps the width the user chose.
 const NAV_PREF_KEY = 'pc.nav.expanded'
 
-interface HiringShellProps {
+interface AdminShellProps {
   session: Session
   profile: UserProfile | null
   profileError: string | null
   onReturn: () => void
 }
 
-export function HiringShell({ session, profile, profileError, onReturn }: HiringShellProps) {
+export function AdminShell({ session, profile, profileError, onReturn }: AdminShellProps) {
   const user = profile ? toPermissionUser(profile) : null
-  const visibleNav = NAV.filter((n) => !n.configureOnly || can(user, 'update', 'hiring'))
-  const [page, setPage] = useState<HiringPage>('applications')
+  const visibleNav = NAV.filter((n) => can(user, 'view', n.resource))
+  const [page, setPage] = useState<AdminPage>(() => visibleNav[0]?.page ?? 'coverage')
   const [expanded, setExpanded] = useState(
     () => localStorage.getItem(NAV_PREF_KEY) === '1',
   )
@@ -80,7 +97,7 @@ export function HiringShell({ session, profile, profileError, onReturn }: Hiring
     })
   }
 
-  const activeLabel = NAV.find((n) => n.page === page)?.label ?? 'Applications'
+  const activeLabel = NAV.find((n) => n.page === page)?.label ?? 'Admin'
 
   return (
     <div className="flex min-h-screen bg-surface text-charcoal">
@@ -92,7 +109,7 @@ export function HiringShell({ session, profile, profileError, onReturn }: Hiring
         <div className="flex h-14 items-center justify-center border-b border-surface-line">
           <img src={monogram} alt="CG" className="h-6 w-auto" />
         </div>
-        <nav className="flex flex-1 flex-col gap-1 p-2" aria-label="Hiring">
+        <nav className="flex flex-1 flex-col gap-1 p-2" aria-label="Admin Center">
           {visibleNav.map((n) => {
             const Icon = n.icon
             const active = page === n.page
@@ -114,7 +131,6 @@ export function HiringShell({ session, profile, profileError, onReturn }: Hiring
             )
           })}
         </nav>
-        {/* The way back out of the section, pinned at the bottom of the menu */}
         <div className="border-t border-surface-line p-2">
           <button
             onClick={onReturn}
@@ -137,7 +153,7 @@ export function HiringShell({ session, profile, profileError, onReturn }: Hiring
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 items-center justify-between border-b border-surface-line bg-surface px-4 sm:px-6">
           <div className="flex items-baseline gap-2">
-            <span className="text-sm font-semibold tracking-wide">Hiring</span>
+            <span className="text-sm font-semibold tracking-wide">Admin Center</span>
             <span className="hidden text-xs uppercase tracking-widest text-charcoal/40 sm:inline">
               People Center — Charcoal Group
             </span>
@@ -155,25 +171,33 @@ export function HiringShell({ session, profile, profileError, onReturn }: Hiring
           </div>
         </header>
         <main className="flex-1 bg-surface">
-          {page === 'job_descriptions' ? (
-            <JobDescriptionsView session={session} profile={profile} readOnly />
+          {page === 'users' ? (
+            <UsersView session={session} profile={profile} />
+          ) : page === 'coverage' ? (
+            <CoverageView session={session} profile={profile} />
+          ) : page === 'reviewers' ? (
+            <ReviewersView session={session} profile={profile} />
+          ) : page === 'job_descriptions' ? (
+            <JobDescriptionsView session={session} profile={profile} />
           ) : page === 'uniforms' ? (
-            <UniformsView session={session} profile={profile} readOnly />
+            <UniformsView session={session} profile={profile} />
           ) : page === 'interviews' ? (
-            <InterviewsView session={session} profile={profile} readOnly />
+            <InterviewsView session={session} profile={profile} />
           ) : page === 'mgmt_process' ? (
-            <MgmtProcessView session={session} profile={profile} readOnly />
-          ) : page === 'watchlist' ? (
-            <WatchlistView session={session} profile={profile} />
+            <MgmtProcessView session={session} profile={profile} />
+          ) : page === 'activity' ? (
+            <ActivityLogView session={session} profile={profile} />
           ) : (
-            <ApplicationsView session={session} profile={profile} />
+            <Suspense fallback={<p className="p-6 text-sm text-charcoal/50">Loading…</p>}>
+              <DataSourcesView profile={profile} session={session} />
+            </Suspense>
           )}
         </main>
       </div>
 
       {helpOpen && <HelpPanel onClose={() => setHelpOpen(false)} />}
 
-      <FeedbackWidget screen={`Hiring — ${activeLabel}`} />
+      <FeedbackWidget screen={`Admin — ${activeLabel}`} />
     </div>
   )
 }

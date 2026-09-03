@@ -1,5 +1,13 @@
 # Project Log
 
+## [2026-09-03] Admin Center built (spec 3f10f057, post-review)
+
+**Shipped:** Admin Center as its own shell-swapped section (AdminShell), per the Ember-reviewed spec: Users & Access, Coverage, Hiring Reviewers, and template editing (Job Descriptions, Uniforms, Interviews, Mgmt Hiring), plus Activity Log and Data Sources — relocated, UI-only, no schema changes. Section opens for admin+executive (new admin_center resource); Users/Activity/Data Sources stay admin-only inside; reach-granting controls remain admin-only (Ember's guard). Hiring keeps read-only references to the same template rows (readOnly prop — views, never copies). Main rail slims to the operate side + Hiring + Admin Center.
+**Roadmap:** Admin Center -> complete (v1).
+**Decisions:** none new (built under a26b9315 / 77ca34f4 / spec 3f10f057 as amended).
+**Blockers:** none.
+**Next:** Michael/Ember: the location_assignments RLS raise from handback 927989ed remains open.
+
 ## [2026-09-03] Hiring build-out under Michael's direction; scope granting becomes admin-only
 
 **Shipped:** Uniform & grooming standards library (10 docs across WC/TBK/Solé/BT&SKT/CG shoes, brand-grouped, editable). Hiring watch list (115 black + 6 grey, admin/exec-only with anonymous contact-HQ flag for reviewers). Management hiring process digitised (9 steps incl. Gourmet Haven case study + P&L). Public guided application form at /apply carrying the full official V.2026.01 form (multi-role, per-day availability with select-all, signed declaration), preview mode, config served read-only by the intake function (submissions still hard-gated). Application pipeline tracker with one-click advance, stale flags, readable (non-JSON) answer rendering, and the red/yellow/green screening traffic light (display-only). Four TEST applicants seeded for Megan's demo. Admin Center spec cycle: spec 3f10f057 → Ember review afbc1537 → Michael's rulings filed (a26b9315; operative standard 77ca34f4) → spec unblocked. Work order 8f520e1e executed: executive branch removed from the three user_scopes write policies (migration 20260903150000), UI made view-only for executives, legacy-cleanup made fail-loud.

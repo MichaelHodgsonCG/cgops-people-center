@@ -11,17 +11,14 @@ import {
   BarChart3,
   Inbox,
   ClipboardList,
-  Database,
   HelpCircle,
   ListTodo,
-  Map,
   MapPin,
   Network,
   LogOut,
-  ScrollText,
+  Settings,
   ShieldAlert,
   Store,
-  UserCog,
   Users,
   type LucideIcon,
 } from 'lucide-react'
@@ -40,12 +37,11 @@ export type View =
   | 'gaps'
   | 'my_tasks'
   | 'bench'
-  | 'data_sources'
-  | 'coverage'
-  | 'users'
-  | 'activity'
   | 'hiring'
+  | 'admin'
 
+// Users, Coverage, Activity Log and Data Sources live in the Admin Center
+// section (spec 3f10f057) — this rail carries the operate-side only.
 const NAV: { view: View; label: string; resource: Resource; icon: LucideIcon }[] = [
   { view: 'directory', label: 'Directory', resource: 'directory', icon: Users },
   { view: 'visit', label: 'Visit', resource: 'directory', icon: MapPin },
@@ -55,10 +51,7 @@ const NAV: { view: View; label: string; resource: Resource; icon: LucideIcon }[]
   { view: 'my_tasks', label: 'My Tasks', resource: 'my_tasks', icon: ListTodo },
   { view: 'bench', label: 'Bench & Risk', resource: 'bench', icon: BarChart3 },
   { view: 'hiring', label: 'Hiring', resource: 'hiring', icon: Inbox },
-  { view: 'data_sources', label: 'Data Sources', resource: 'data_sources', icon: Database },
-  { view: 'coverage', label: 'Covered locations', resource: 'user_scopes', icon: Map },
-  { view: 'users', label: 'Users', resource: 'admin_area', icon: UserCog },
-  { view: 'activity', label: 'Activity Log', resource: 'admin_area', icon: ScrollText },
+  { view: 'admin', label: 'Admin Center', resource: 'admin_center', icon: Settings },
 ]
 
 const NAV_PREF_KEY = 'pc.nav.expanded'

@@ -1,11 +1,10 @@
-import { lazy, Suspense, useState } from 'react'
+import { useState } from 'react'
 import { useSession } from './features/auth/useSession'
 import { RedirectToCgops } from './features/auth/RedirectToCgops'
 import { AppShell, type View } from './components/AppShell'
 import { SessionTimeoutManager } from './components/SessionTimeoutManager'
-import { UsersView } from './features/admin/UsersView'
-import { ActivityLogView } from './features/activity/ActivityLogView'
 import { HiringShell } from './features/hiring/HiringShell'
+import { AdminShell } from './features/admin/AdminShell'
 import { DirectoryView } from './features/directory/DirectoryView'
 import { VisitView } from './features/visit/VisitView'
 import { OrgChartView } from './features/org/OrgChartView'
@@ -13,16 +12,7 @@ import { UpcomingView } from './features/upcoming/UpcomingView'
 import { GapView } from './features/gaps/GapView'
 import { MyTasksView } from './features/tasks/MyTasksView'
 import { BenchView } from './features/bench/BenchView'
-import { CoverageView } from './features/coverage/CoverageView'
 import { can, toPermissionUser } from './permissions'
-
-// Lazy: the sync pipeline (and its xlsx parser) only loads for admins who
-// open Data Sources.
-const DataSourcesView = lazy(() =>
-  import('./features/data-sources/DataSourcesView').then((m) => ({
-    default: m.DataSourcesView,
-  })),
-)
 
 // Deep link from CGOPS My Day (Menu Center's pattern): /?view=my-tasks opens
 // My Tasks. The QUERY carries it — the hash is reserved for the SSO handoff.
@@ -55,22 +45,33 @@ export default function App() {
 
   const user = profile ? toPermissionUser(profile) : null
   const guarded =
-    (view === 'data_sources' && !can(user, 'view', 'data_sources')) ||
     (view === 'bench' && !can(user, 'view', 'bench')) ||
     (view === 'gaps' && !can(user, 'view', 'gap_analysis')) ||
-    (view === 'coverage' && !can(user, 'view', 'user_scopes')) ||
-    (view === 'users' && !can(user, 'view', 'admin_area')) ||
-    (view === 'activity' && !can(user, 'view', 'admin_area')) ||
-    (view === 'hiring' && !can(user, 'view', 'hiring'))
+    (view === 'hiring' && !can(user, 'view', 'hiring')) ||
+    (view === 'admin' && !can(user, 'view', 'admin_center'))
   const effectiveView: View = guarded ? 'directory' : view
 
-  // Hiring is its own section: it swaps the whole shell (own left menu with a
-  // "Return to People Center" exit) rather than rendering inside AppShell.
+  // Hiring and the Admin Center are their own sections: each swaps the whole
+  // shell (own left menu with a "Return to People Center" exit) rather than
+  // rendering inside AppShell.
   if (effectiveView === 'hiring') {
     return (
       <>
         <SessionTimeoutManager />
         <HiringShell
+          session={session}
+          profile={profile}
+          profileError={profileError}
+          onReturn={() => setView('directory')}
+        />
+      </>
+    )
+  }
+  if (effectiveView === 'admin') {
+    return (
+      <>
+        <SessionTimeoutManager />
+        <AdminShell
           session={session}
           profile={profile}
           profileError={profileError}
@@ -93,15 +94,7 @@ export default function App() {
       view={effectiveView}
       onNavigate={setView}
     >
-      {effectiveView === 'data_sources' ? (
-        <Suspense fallback={<p className="p-6 text-sm text-charcoal/50">Loading…</p>}>
-          <DataSourcesView profile={profile} session={session} />
-        </Suspense>
-      ) : effectiveView === 'users' ? (
-        <UsersView session={session} profile={profile} />
-      ) : effectiveView === 'activity' ? (
-        <ActivityLogView session={session} profile={profile} />
-      ) : effectiveView === 'visit' ? (
+      {effectiveView === 'visit' ? (
         <VisitView session={session} profile={profile} />
       ) : effectiveView === 'org_chart' ? (
         <OrgChartView session={session} profile={profile} />
@@ -113,8 +106,6 @@ export default function App() {
         <MyTasksView session={session} profile={profile} />
       ) : effectiveView === 'bench' ? (
         <BenchView session={session} profile={profile} />
-      ) : effectiveView === 'coverage' ? (
-        <CoverageView session={session} profile={profile} />
       ) : (
         <DirectoryView session={session} profile={profile} isAdmin={user?.role === 'admin'} />
       )}

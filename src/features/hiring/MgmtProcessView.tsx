@@ -16,12 +16,14 @@ import { fetchHiringGuides, saveHiringGuide, type HiringGuide, type HiringGuideE
 interface MgmtProcessViewProps {
   session: Session
   profile: UserProfile | null
+  /** Hiring-section reference mode: same rows, no editing — the editors live in the Admin Center (spec 3f10f057). */
+  readOnly?: boolean
 }
 
-export function MgmtProcessView({ session, profile }: MgmtProcessViewProps) {
+export function MgmtProcessView({ session, profile, readOnly }: MgmtProcessViewProps) {
   const actor = actorFrom(profile, session)
   const user = profile ? toPermissionUser(profile) : null
-  const canEdit = can(user, 'update', 'hiring')
+  const canEdit = !readOnly && can(user, 'update', 'hiring')
 
   const [guides, setGuides] = useState<HiringGuide[]>([])
   const [loading, setLoading] = useState(true)

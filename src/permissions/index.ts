@@ -34,6 +34,7 @@ export type Resource =
   | 'user_scopes' // Covered-locations picker: manage bespoke coverage grants (HQ)
   | 'my_tasks' // gap seats assigned to me (owner/support) — every signed-in role
   | 'hiring' // TM applications: HQ + manager roles open the view (RLS scopes rows)
+  | 'admin_center' // the Admin Center section (spec 3f10f057 / standard 77ca34f4)
 
 export interface PermissionUser {
   role: AppRole
@@ -92,6 +93,14 @@ export function can(
       if (action === 'view')
         return ['executive', 'regional_leader', 'location_leader'].includes(user.role)
       return action === 'update' && user.role === 'executive'
+    case 'admin_center':
+      // The Admin Center SECTION opens for admin + executive (standard
+      // 77ca34f4 rule 2: in-center definition is the center's own). The gate
+      // is the section only — pages inside carry their own gates, and every
+      // control that GRANTS REACH stays admin-only (Ember's guard, review
+      // afbc1537): Users & Access, Activity Log and Data Sources check
+      // admin_area; scope writes check user_scopes (admin-only).
+      return action === 'view' && user.role === 'executive'
     case 'my_tasks':
       // Every signed-in role: the RLS on people_center_gap_assignments already
       // scopes non-HQ roles to their OWN rows (owner/support), so the view is

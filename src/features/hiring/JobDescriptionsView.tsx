@@ -22,12 +22,14 @@ import {
 interface JobDescriptionsViewProps {
   session: Session
   profile: UserProfile | null
+  /** Hiring-section reference mode: same rows, no editing — the editors live in the Admin Center (spec 3f10f057). */
+  readOnly?: boolean
 }
 
-export function JobDescriptionsView({ session, profile }: JobDescriptionsViewProps) {
+export function JobDescriptionsView({ session, profile, readOnly }: JobDescriptionsViewProps) {
   const actor = actorFrom(profile, session)
   const user = profile ? toPermissionUser(profile) : null
-  const canEdit = can(user, 'update', 'hiring')
+  const canEdit = !readOnly && can(user, 'update', 'hiring')
 
   const [docs, setDocs] = useState<JobDescription[]>([])
   const [loading, setLoading] = useState(true)
