@@ -95,6 +95,92 @@ export const NEXT_ACTION: Partial<Record<ApplicationStatus, string>> = {
   decision_pending: 'Make the decision and communicate it to the applicant within one week.',
 }
 
+// --- Screening traffic light -------------------------------------------------
+// Derived FLAGS from the application's own answers (plus the watch-list
+// check when the caller has it): red = stop and check before proceeding,
+// yellow = proceed with caution, green = nothing in the answers to flag.
+// Display-only by design — nothing is ever auto-advanced or auto-rejected;
+// every reason is shown so the reviewer judges it (Michael's standing rule).
+
+export type ScreenLevel = 'green' | 'yellow' | 'red'
+export interface ScreenFlag {
+  level: 'red' | 'yellow'
+  reason: string
+}
+
+const saidNo = (v: unknown) => typeof v === 'string' && v.trim().toLowerCase() === 'no'
+const saidYes = (v: unknown) => typeof v === 'string' && v.trim().toLowerCase() === 'yes'
+
+export function screenApplication(
+  app: ApplicationRow,
+  watch: WatchlistMatch[] = [],
+): { level: ScreenLevel; flags: ScreenFlag[] } {
+  const flags: ScreenFlag[] = []
+  const f = app.form as Record<string, any>
+  const roleText = (Array.isArray(f.positions) ? f.positions.join(', ') : app.desired_position) ?? ''
+  const alcoholRole = /server|bartender/i.test(roleText)
+
+  for (const w of watch) {
+    flags.push(
+      w.list === 'black'
+        ? { level: 'red', reason: 'Name matches the CG do-not-hire list — contact HQ before proceeding (it may be a different person with the same name).' }
+        : { level: 'yellow', reason: 'Name matches the CG proceed-with-caution list — check with HQ.' },
+    )
+  }
+
+  const we = f.work_eligibility
+  if (saidNo(we) || saidNo(we?.legal_right_to_work_in_canada)) {
+    flags.push({ level: 'red', reason: 'Answered No to having the legal right to work in Canada.' })
+  }
+  if (saidNo(we?.can_submit_documents)) {
+    flags.push({ level: 'red', reason: 'Cannot submit documents proving the right to work.' })
+  }
+  if (saidNo(f.essential_functions)) {
+    flags.push({ level: 'red', reason: 'Answered No to being able to perform the essential functions of the job.' })
+  }
+  if (saidNo(f.minimum_age)) {
+    flags.push(
+      alcoholRole
+        ? { level: 'red', reason: `Not of legal age to serve alcohol — applying for ${roleText}.` }
+        : { level: 'yellow', reason: 'Not of legal age to serve alcohol.' },
+    )
+  }
+  if (saidNo(f.alcohol_service?.can_submit_proof_of_age)) {
+    flags.push({ level: 'yellow', reason: 'Cannot submit proof of age.' })
+  }
+  if (alcoholRole && saidNo(f.alcohol_service?.smart_serve_certified)) {
+    flags.push({ level: 'yellow', reason: `No Smart Serve certification — required for ${roleText}.` })
+  }
+  if (saidYes(f.affiliated_history?.ever_employed)) {
+    const where = f.affiliated_history?.location
+    flags.push({
+      level: 'yellow',
+      reason: `Says they worked at ${where || 'an affiliated restaurant'} — verify our records (and Push) before proceeding.`,
+    })
+  }
+  const av = f.availability ?? {}
+  const terms = typeof av.jobs_terminated_from === 'string' ? av.jobs_terminated_from : ''
+  if (['2', '3', '4 or more'].includes(terms)) {
+    flags.push({ level: 'yellow', reason: `Terminated from ${terms} job${terms === '2' ? 's' : 's'} — worth asking about.` })
+  }
+  if (saidNo(av.holidays_and_weekends)) {
+    flags.push({ level: 'yellow', reason: 'Cannot work holidays and weekends.' })
+  }
+  if (saidNo(av.adequate_transportation)) {
+    flags.push({ level: 'yellow', reason: 'No adequate transportation for early/late shifts.' })
+  }
+  if (saidNo(av.flexible_for_training)) {
+    flags.push({ level: 'yellow', reason: 'Schedule not flexible for required training.' })
+  }
+
+  const level: ScreenLevel = flags.some((x) => x.level === 'red')
+    ? 'red'
+    : flags.length > 0
+      ? 'yellow'
+      : 'green'
+  return { level, flags }
+}
+
 export const STALE_AFTER_DAYS = 7
 
 export function daysSince(iso: string): number {

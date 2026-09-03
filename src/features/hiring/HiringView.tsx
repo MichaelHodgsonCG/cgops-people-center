@@ -26,6 +26,7 @@ import {
   checkWatchlist,
   daysSince,
   isStale,
+  screenApplication,
   fetchAllPositions,
   fetchApplicationDetail,
   fetchApplications,
@@ -173,7 +174,10 @@ export function ApplicationsView({ session, profile }: HiringPageProps) {
                   onClick={() => setSelected(a)}
                   className="cursor-pointer border-b border-surface-line/60 last:border-0 hover:bg-surface-muted/50"
                 >
-                  <td className="px-4 py-2.5 font-medium">{a.applicant?.full_name ?? '?'}</td>
+                  <td className="px-4 py-2.5 font-medium">
+                    <ScreenDot app={a} />
+                    {a.applicant?.full_name ?? '?'}
+                  </td>
                   <td className="px-4 py-2.5">{a.desired_position}</td>
                   <td className="px-4 py-2.5 text-xs text-charcoal/60">{a.location_name}</td>
                   <td className="px-4 py-2.5 text-xs whitespace-nowrap text-charcoal/60">
@@ -212,6 +216,75 @@ export function ApplicationsView({ session, profile }: HiringPageProps) {
         />
       )}
     </div>
+  )
+}
+
+// Screening traffic light — flags derived from the application's own
+// answers (screenApplication in api.ts), display-only: red = stop and
+// check, yellow = caution with reasons, green = nothing in the answers to
+// flag. The judgement stays with the reviewer; nothing is auto-actioned.
+
+const SCREEN_STYLE = {
+  red: { box: 'border-danger/50 bg-danger/10', chip: 'bg-danger text-white', label: 'Red — stop and check' },
+  yellow: { box: 'border-warning/50 bg-warning/10', chip: 'bg-warning text-white', label: 'Yellow — proceed with caution' },
+  green: { box: 'border-success/40 bg-success/10', chip: 'bg-success text-white', label: 'Green — nothing flagged' },
+} as const
+
+const DOT_STYLE = { red: 'bg-danger', yellow: 'bg-warning', green: 'bg-success' } as const
+
+function ScreenDot({ app }: { app: ApplicationRow }) {
+  // List-level dot uses the answers only (the watch-list check runs when the
+  // application is opened); reasons in the hover title.
+  const s = screenApplication(app)
+  return (
+    <span
+      className={`mr-2 inline-block h-2.5 w-2.5 rounded-full align-middle ${DOT_STYLE[s.level]}`}
+      title={s.flags.length > 0 ? s.flags.map((x) => x.reason).join('\n') : 'Nothing flagged in the answers'}
+    />
+  )
+}
+
+function ScreeningCard({
+  app,
+  watch,
+  watchNotes,
+}: {
+  app: ApplicationRow
+  watch: WatchlistMatch[]
+  watchNotes: WatchlistEntry[]
+}) {
+  const s = screenApplication(app, watch)
+  const st = SCREEN_STYLE[s.level]
+  return (
+    <section className={`mb-3 rounded-md border px-3 py-2 text-xs ${st.box}`}>
+      <div className="flex items-center gap-2">
+        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${st.chip}`}>
+          {st.label}
+        </span>
+        <span className="text-charcoal/55">from the application answers — the call is still yours</span>
+      </div>
+      {s.flags.length > 0 && (
+        <ul className="mt-1.5 space-y-0.5">
+          {s.flags.map((x, i) => (
+            <li key={i} className={x.level === 'red' ? 'font-medium text-danger' : 'text-charcoal/75'}>
+              {x.level === 'red' ? '⛔' : '⚠️'} {x.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+      {watchNotes.length > 0 && (
+        <ul className="mt-1.5 space-y-0.5 border-t border-surface-line/60 pt-1.5 text-charcoal/75">
+          {watchNotes.map((w) => (
+            <li key={w.id}>
+              <span className="font-medium">Watch list:</span> {w.role && `${w.role} · `}
+              {w.former_cg && w.former_cg !== '-' && `${w.former_cg} · `}
+              {w.notes}
+              {w.noted_date && ` (${w.noted_date})`}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   )
 }
 
@@ -585,38 +658,7 @@ function ApplicationPanel({
 
         <StageTracker app={app} actor={actor} onChanged={onChanged} />
 
-        {watch.length > 0 && (
-          <div
-            className={`mb-3 rounded-md border px-3 py-2 text-xs ${
-              watch.some((w) => w.list === 'black')
-                ? 'border-danger/50 bg-danger/10'
-                : 'border-warning/50 bg-warning/10'
-            }`}
-          >
-            <p className={`font-medium ${watch.some((w) => w.list === 'black') ? 'text-danger' : 'text-warning'}`}>
-              {watch.some((w) => w.list === 'black')
-                ? 'This name matches the CG do-not-hire list. Do not interview, hire, or re-hire.'
-                : 'This name matches the CG proceed-with-caution list.'}
-            </p>
-            {watchNotes.length > 0 ? (
-              <ul className="mt-1 space-y-0.5 text-charcoal/75">
-                {watchNotes.map((w) => (
-                  <li key={w.id}>
-                    {w.role && `${w.role} · `}
-                    {w.former_cg && w.former_cg !== '-' && `${w.former_cg} · `}
-                    {w.notes}
-                    {w.noted_date && ` (${w.noted_date})`}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-0.5 text-charcoal/70">
-                Contact HQ (the People team) before taking this application any further — the
-                details are held there. It may also be a different person with the same name.
-              </p>
-            )}
-          </div>
-        )}
+        <ScreeningCard app={app} watch={watch} watchNotes={watchNotes} />
 
         {prior.length > 0 && (
           <div className="mb-3 rounded-md border border-info/40 bg-info/5 px-3 py-2 text-xs">
