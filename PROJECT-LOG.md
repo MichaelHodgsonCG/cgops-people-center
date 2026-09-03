@@ -1,5 +1,13 @@
 # Project Log
 
+## [2026-09-03] Step logistics as structured fields; workflow tailors to the role
+
+**Shipped:** (1) The remaining workbook fill-ins are structured fields on the guided workflow (migration 20260903210000: one updatable row per application+stage, reviewer-writable, audited): Where? (In person/Zoom) on the culture, financial and final interview steps; TAIS link; Where? + Signed back? on Offer. The workbook's in-person rule is enforced visually — if both the culture and financial interviews are marked Zoom, a red warning appears on both steps. (2) Role tailoring per Michael's ask: the financial step shows only the tier matching the role being interviewed for (GSM/SM/Sous · BM/AGM · GM/CDC; case study + P&L always shown), the other tiers behind a one-click "hidden — open if the role changes" reveal; the TAIS step tells non-AGM/GM/CDC candidates it is not required and tucks its guide away the same way. Nothing deleted — a role change brings the right content back automatically since everything derives from desired_position. Vercel production READY (0de2453).
+**Roadmap:** Mgmt hiring workflow -> workbook fully baked in (guides + forms + logistics + role tiering).
+**Decisions:** Proceed?/Interviewer/Date stay implicit (Complete-step button + event attribution) — no duplicate fields. Logistics rows are updatable (a Zoom call becomes in-person), unlike interviews/references which stay immutable records.
+**Blockers:** none.
+**Next:** Standing asks unchanged (FOH screening questions; Pipeline Speed widening; test-data purge).
+
 ## [2026-09-03] Reference Check Form baked in (Michael's audit catch)
 
 **Shipped:** Audited the CG Mgmt Interview Process workbook (re-sent by Michael, same file as digitised — sha-matched) against the app. Finding: the guide TEXT of all 10 tabs was in, but the fillable structures were not — chiefly the Reference Check Form (right half of tab 2). Built it field-for-field into the Reference check step of the guided workflow, both flows: per-call record (source Candidate-provided/CG-sourced, date, contact, phone, company, their position, position confirmed, job performance, attendance/punctuality, attitude, opportunities/concerns, would-you-rehire with the process's "No — STOP!" warning, other comments), live tally vs the standard (2 positive min, +1 self-sourced for mgmt; goes green when met), immutable records (migration 20260903200000: RLS mirrors recorded interviews — reviewer inserts, admin/exec amend, no delete), reference.recorded event + audit per save. Vercel production READY (1311f6c).
