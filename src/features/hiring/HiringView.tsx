@@ -219,10 +219,39 @@ export function ApplicationsView({ session, profile }: HiringPageProps) {
 // each stage a dot on the line, the current one live, terminal outcome at
 // the end, updated-ago with a stale flag, and the next action per the CG
 // hiring process.
-function StageTracker({ app }: { app: ApplicationRow }) {
+function StageTracker({
+  app,
+  actor,
+  onChanged,
+}: {
+  app: ApplicationRow
+  actor: ReturnType<typeof actorFrom>
+  onChanged: () => void
+}) {
   const terminal = TERMINAL_STATUSES.includes(app.status)
   const currentIdx = terminal ? PIPELINE_STAGES.length : PIPELINE_STAGES.indexOf(app.status)
   const stale = isStale(app)
+  // One-click advance to the next pipeline stage; the final move (to an
+  // outcome) stays a deliberate choice in the Move stage box below.
+  const nextStage =
+    !terminal && currentIdx >= 0 && currentIdx < PIPELINE_STAGES.length - 1
+      ? PIPELINE_STAGES[currentIdx + 1]
+      : null
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  async function advance() {
+    if (!nextStage) return
+    setBusy(true)
+    setErr(null)
+    try {
+      await setApplicationStatus(actor, app, nextStage, '')
+      onChanged()
+    } catch (e) {
+      setErr(errText(e))
+      setBusy(false)
+    }
+  }
   return (
     <section className="mb-3 rounded-xl border border-surface-line p-3">
       <div className="flex items-start gap-0">
@@ -286,10 +315,22 @@ function StageTracker({ app }: { app: ApplicationRow }) {
         )}
       </div>
       {NEXT_ACTION[app.status] && (
-        <p className="mt-1.5 rounded-md bg-cg-orange-soft/40 px-2.5 py-1.5 text-xs text-charcoal/75">
-          <span className="font-medium text-cg-orange">Next:</span> {NEXT_ACTION[app.status]}
-        </p>
+        <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 rounded-md bg-cg-orange-soft/40 px-2.5 py-1.5">
+          <p className="min-w-0 flex-1 text-xs text-charcoal/75">
+            <span className="font-medium text-cg-orange">Next:</span> {NEXT_ACTION[app.status]}
+          </p>
+          {nextStage && (
+            <button
+              onClick={() => void advance()}
+              disabled={busy}
+              className="shrink-0 rounded-md bg-cg-orange px-2.5 py-1 text-xs font-medium text-white hover:bg-cg-orange-hover disabled:opacity-50"
+            >
+              {busy ? 'Moving…' : `Move to ${STATUS_LABELS[nextStage]} →`}
+            </button>
+          )}
+        </div>
       )}
+      {err && <p className="mt-1 text-xs text-danger">{err}</p>}
     </section>
   )
 }
@@ -365,7 +406,7 @@ function ApplicationPanel({
           </span>
         </div>
 
-        <StageTracker app={app} />
+        <StageTracker app={app} actor={actor} onChanged={onChanged} />
 
         {watch.length > 0 && (
           <div
