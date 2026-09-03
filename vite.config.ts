@@ -1,4 +1,3 @@
-import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -11,10 +10,12 @@ export default defineConfig({
   plugins: [react()],
   publicDir: false,
   build: {
+    // Plain relative paths: resolved against the project root, no Node
+    // type declarations needed (Vercel's clean install has none).
     rollupOptions: {
       input: {
-        main: resolve(__dirname, 'index.html'),
-        apply: resolve(__dirname, 'apply.html'),
+        main: 'index.html',
+        apply: 'apply.html',
       },
     },
   },
