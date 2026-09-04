@@ -1,5 +1,13 @@
 # Project Log
 
+## [2026-09-04] Reviewed Ember's Leader Sourcing agent brief
+
+**Shipped:** Review of agent brief 5a529f8c filed to the bus (671210da), verified against the live schema. Verdict: sound — boundary discipline (public/professional only, protected grounds excluded, no contact, no assessment) endorsed as written. Four amendments for Ember: (1) don't read the watch-list table (admin-only since 20260903220000, and a full read puts ~120 sensitive names in agent logs) — use people_center_watchlist_check(p_name) per surfaced name; drop the stale "122 names" (includes the TEST entry); (2) point "CG markets" at people_center_locations explicitly; (3) also exclude active people_center_applicants, not just current CG people; (4) bound the principles line to evidence-mapping, no characterisation. Verified agent_runs/agent_findings are RLS admin-only. Two decisions put to Michael: retention/refresh period for non-consenting sourced names (suggest 6-12 months), and whether/when the shortlist opens beyond admin.
+**Roadmap:** Leader sourcing -> reviewed, awaiting Ember's amendments + Michael's two calls.
+**Decisions:** none of mine — two escalated to Michael (above).
+**Blockers:** none.
+**Next:** Ember amends the brief; Michael answers retention + visibility.
+
 ## [2026-09-03] Approvals one-of-two; watch list admin-held with open reporting; interview hard fail
 
 **Shipped:** Three rulings from Michael, live. (1) Manager approvals are one-OR-the-other: FOH needs Megan Stover or John Mackay, BOH needs Todd Clarmo or Michael Hodgson — the Offer gate now takes ONE approval from the track's named approvers (signatures stay personal + immutable; UI copy and guidance updated). (2) Watch list: full list moved to Admin Center, admin-only end to end (migration 20260903220000 — select/update/delete admin only, executive read removed); new submit-only "Report to Watch List" page in Hiring lets any hiring role add a name without reading a row back; any name match on an application is now a YELLOW flag with one generic message — "check with admin before proceeding" — never which list, never the notes. (3) Patterned interviews: Unacceptable response leads every answer list (recorder + guide viewer), and one unacceptable answer (rude/racial/sexist/inappropriate) FAILS the whole interview regardless of score — red fail banner while recording, FAIL badge replacing pass marks on the record, event/audit say FAILED. Vercel production READY (e737409).
